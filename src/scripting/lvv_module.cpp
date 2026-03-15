@@ -1,0 +1,629 @@
+#include "lvv_module.hpp"
+#include "script_engine.hpp"
+#include "protocol/protocol.hpp"
+#include "core/screen_capture.hpp"
+#include "core/visual_regression.hpp"
+#include "core/widget_tree.hpp"
+
+#include "pocketpy.h"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+
+namespace lvv {
+
+// Global protocol pointer — safe because PocketPy is single-threaded
+static Protocol* g_protocol = nullptr;
+
+// Object map: logical name -> widget selector
+static nlohmann::json g_object_map;
+
+// Default settings from CLI
+static std::string g_ref_images_dir = "ref_images";
+static double g_default_threshold = 0.1;
+
+void lvv_module_set_protocol(Protocol* protocol) {
+    g_protocol = protocol;
+}
+
+void lvv_module_reset_state() {
+    g_object_map.clear();
+}
+
+void lvv_module_set_defaults(const std::string& ref_dir, double threshold) {
+    g_ref_images_dir = ref_dir;
+    g_default_threshold = threshold;
+}
+
+// Resolve a name through the object map. If the name is in the map,
+// return the mapped selector. Otherwise return the name as-is.
+static std::string resolve_name(const char* name) {
+    if (!g_object_map.empty() && g_object_map.contains(name)) {
+        return g_object_map[name].get<std::string>();
+    }
+    return name;
+}
+
+// Helper: check cancellation and protocol connection
+static bool check_protocol() {
+    if (ScriptEngine::cancelled().load()) {
+        py_exception(tp_RuntimeError, "Script cancelled (timeout)");
+        return false;
+    }
+    if (!g_protocol || !g_protocol->is_connected()) {
+        py_exception(tp_RuntimeError, "Not connected to target");
+        return false;
+    }
+    return true;
+}
+
+// --- Python bindings ---
+
+static bool py_lvv_ping(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+
+    try {
+        auto version = g_protocol->ping();
+        py_newstr(py_retval(), version.c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_click(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->click(name);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_click_at(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    int x = py_toint(py_arg(0));
+    int y = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->click_at(x, y);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_press(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    int x = py_toint(py_arg(0));
+    int y = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->press(x, y);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_release(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->release();
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_move_to(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    int x = py_toint(py_arg(0));
+    int y = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->move_to(x, y);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_swipe(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(5);
+    int x1 = py_toint(py_arg(0));
+    int y1 = py_toint(py_arg(1));
+    int x2 = py_toint(py_arg(2));
+    int y2 = py_toint(py_arg(3));
+    int duration = py_toint(py_arg(4));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->swipe(x1, y1, x2, y2, duration);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_type_text(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* text = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->type_text(text);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_key(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* key_code = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->key(key_code);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_screenshot(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* path = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    try {
+        auto img = g_protocol->screenshot();
+        if (!img.valid()) {
+            return py_exception(tp_RuntimeError, "Failed to capture screenshot");
+        }
+        bool ok = save_png(img, path);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_screenshot_compare(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    const char* ref_path_arg = py_tostr(py_arg(0));
+    double threshold = py_tofloat(py_arg(1));
+    if (!check_protocol()) return false;
+
+    // Use default threshold if caller passes 0 or negative
+    if (threshold <= 0.0) threshold = g_default_threshold;
+
+    // Resolve relative paths against the ref_images directory
+    std::string ref_path = ref_path_arg;
+    if (!ref_path.empty() && ref_path[0] != '/') {
+        ref_path = g_ref_images_dir + "/" + ref_path;
+    }
+
+    try {
+        // Take current screenshot
+        auto actual = g_protocol->screenshot();
+        if (!actual.valid()) {
+            return py_exception(tp_RuntimeError, "Failed to capture screenshot");
+        }
+
+        // Ensure ref directory exists
+        auto parent = std::filesystem::path(ref_path).parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
+
+        // Load or create reference
+        auto reference = load_png(ref_path);
+        if (!reference.valid()) {
+            // First run: create reference
+            save_png(actual, ref_path);
+            py_newbool(py_retval(), true);
+            return true;
+        }
+
+        CompareOptions opts;
+        opts.diff_threshold = threshold;
+        auto diff = compare_images(reference, actual, opts);
+
+        py_newbool(py_retval(), diff.passed);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_wait(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    int ms = py_toint(py_arg(0));
+    // Sleep in small increments so cancellation is responsive
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (ScriptEngine::cancelled().load()) {
+            return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
+        }
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        auto chunk = std::min(remaining, std::chrono::milliseconds(100));
+        if (chunk.count() > 0) {
+            std::this_thread::sleep_for(chunk);
+        }
+    }
+    py_newnone(py_retval());
+    return true;
+}
+
+static bool py_lvv_assert_visible(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        auto widget = g_protocol->find(name);
+        if (!widget || !widget->visible) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' is not visible", name);
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_assert_hidden(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        auto widget = g_protocol->find(name);
+        if (widget && widget->visible) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' is visible (expected hidden)", name);
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_assert_value(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(3);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    const char* expected = py_tostr(py_arg(2));
+    if (!check_protocol()) return false;
+
+    try {
+        auto props = g_protocol->get_props(name, prop);
+        std::string actual_val;
+        if (props.contains(prop)) {
+            actual_val = props[prop].dump();
+            // Remove quotes for string values
+            if (actual_val.size() >= 2 && actual_val.front() == '"') {
+                actual_val = actual_val.substr(1, actual_val.size() - 2);
+            }
+        } else {
+            return py_exception(tp_RuntimeError,
+                "Widget '%s' has no property '%s'",
+                name.c_str(), prop);
+        }
+        if (actual_val != expected) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': expected '%s', got '%s'",
+                name.c_str(), prop, expected, actual_val.c_str());
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_get_tree(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+
+    try {
+        auto tree = g_protocol->get_tree();
+        // Return as string (JSON) — PocketPy doesn't have dict literal creation easily
+        std::string json_str = tree.dump();
+        py_newstr(py_retval(), json_str.c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_find(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        auto widget = g_protocol->find(name);
+        if (!widget) {
+            py_newnone(py_retval());
+        } else {
+            // Return basic info as JSON string
+            nlohmann::json j;
+            j["name"] = widget->name;
+            j["type"] = widget->type;
+            j["x"] = widget->x;
+            j["y"] = widget->y;
+            j["width"] = widget->width;
+            j["height"] = widget->height;
+            j["visible"] = widget->visible;
+            j["auto_path"] = widget->auto_path;
+            j["text"] = widget->text;
+            py_newstr(py_retval(), j.dump().c_str());
+        }
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_get_props(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        auto props = g_protocol->get_props(name);
+        py_newstr(py_retval(), props.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_screen_info(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+
+    try {
+        auto info = g_protocol->get_screen_info();
+        nlohmann::json j;
+        j["width"] = info.width;
+        j["height"] = info.height;
+        j["color_format"] = info.color_format;
+        py_newstr(py_retval(), j.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_find_at(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    int x = py_toint(py_arg(0));
+    int y = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+
+        auto widget = tree.find_at(x, y);
+        if (!widget) {
+            py_newnone(py_retval());
+        } else {
+            nlohmann::json j;
+            j["name"] = widget->name;
+            j["type"] = widget->type;
+            j["auto_path"] = widget->auto_path;
+            j["text"] = widget->text;
+            j["x"] = widget->x;
+            j["y"] = widget->y;
+            j["width"] = widget->width;
+            j["height"] = widget->height;
+            j["visible"] = widget->visible;
+            j["clickable"] = widget->clickable;
+            py_newstr(py_retval(), j.dump().c_str());
+        }
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_get_all_widgets(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+
+    try {
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+
+        auto widgets = tree.flatten();
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto* w : widgets) {
+            nlohmann::json j;
+            j["name"] = w->name;
+            j["type"] = w->type;
+            j["auto_path"] = w->auto_path;
+            j["text"] = w->text;
+            j["x"] = w->x;
+            j["y"] = w->y;
+            j["width"] = w->width;
+            j["height"] = w->height;
+            j["visible"] = w->visible;
+            j["clickable"] = w->clickable;
+            arr.push_back(j);
+        }
+        py_newstr(py_retval(), arr.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// --- Object Map ---
+
+static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* path = py_tostr(py_arg(0));
+
+    try {
+        std::ifstream f(path);
+        if (!f.is_open()) {
+            return py_exception(tp_RuntimeError, "Cannot open object map: %s", path);
+        }
+        g_object_map = nlohmann::json::parse(f);
+        py_newint(py_retval(), static_cast<int>(g_object_map.size()));
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "Invalid object map: %s", e.what());
+    }
+}
+
+// --- wait_for / wait_until ---
+
+static bool py_lvv_wait_for(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    int timeout_ms = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(timeout_ms);
+    constexpr int poll_interval_ms = 100;
+
+    while (true) {
+        if (ScriptEngine::cancelled().load()) {
+            return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
+        }
+
+        try {
+            auto widget = g_protocol->find(name);
+            if (widget && widget->visible) {
+                py_newbool(py_retval(), true);
+                return true;
+            }
+        } catch (...) {}
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return py_exception(tp_TimeoutError,
+                "Timed out waiting for widget '%s' (%dms)",
+                name.c_str(), timeout_ms);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+    }
+}
+
+static bool py_lvv_wait_until(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(4);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    const char* expected = py_tostr(py_arg(2));
+    int timeout_ms = py_toint(py_arg(3));
+    if (!check_protocol()) return false;
+
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(timeout_ms);
+    constexpr int poll_interval_ms = 100;
+    std::string last_value;
+
+    while (true) {
+        if (ScriptEngine::cancelled().load()) {
+            return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
+        }
+
+        try {
+            auto widget = g_protocol->find(name);
+            if (widget) {
+                // Check the "text" property directly from find result
+                if (std::string(prop) == "text") {
+                    if (widget->text == expected) {
+                        py_newbool(py_retval(), true);
+                        return true;
+                    }
+                    last_value = widget->text;
+                } else {
+                    // Use get_props for other properties
+                    auto props = g_protocol->get_props(name, prop);
+                    if (props.contains(prop)) {
+                        std::string val = props[prop].dump();
+                        // Strip quotes for string values
+                        if (val.size() >= 2 && val.front() == '"') {
+                            val = val.substr(1, val.size() - 2);
+                        }
+                        if (val == expected) {
+                            py_newbool(py_retval(), true);
+                            return true;
+                        }
+                        last_value = val;
+                    }
+                }
+            }
+        } catch (...) {}
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return py_exception(tp_TimeoutError,
+                "Timed out waiting for '%s'.%s == '%s' (last: '%s', %dms)",
+                name.c_str(), prop, expected, last_value.c_str(), timeout_ms);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+    }
+}
+
+void lvv_module_register() {
+    py_GlobalRef mod = py_newmodule("lvv");
+
+    py_bind(mod, "ping()", py_lvv_ping);
+    py_bind(mod, "click(name)", py_lvv_click);
+    py_bind(mod, "click_at(x, y)", py_lvv_click_at);
+    py_bind(mod, "press(x, y)", py_lvv_press);
+    py_bind(mod, "release()", py_lvv_release);
+    py_bind(mod, "move_to(x, y)", py_lvv_move_to);
+    py_bind(mod, "swipe(x1, y1, x2, y2, duration)", py_lvv_swipe);
+    py_bind(mod, "type_text(text)", py_lvv_type_text);
+    py_bind(mod, "key(code)", py_lvv_key);
+    py_bind(mod, "screenshot(path)", py_lvv_screenshot);
+    py_bind(mod, "screenshot_compare(ref_path, threshold)", py_lvv_screenshot_compare);
+    py_bind(mod, "wait(ms)", py_lvv_wait);
+    py_bind(mod, "assert_visible(name)", py_lvv_assert_visible);
+    py_bind(mod, "assert_hidden(name)", py_lvv_assert_hidden);
+    py_bind(mod, "assert_value(name, prop, expected)", py_lvv_assert_value);
+    py_bind(mod, "get_tree()", py_lvv_get_tree);
+    py_bind(mod, "find(name)", py_lvv_find);
+    py_bind(mod, "find_at(x, y)", py_lvv_find_at);
+    py_bind(mod, "get_all_widgets()", py_lvv_get_all_widgets);
+    py_bind(mod, "get_props(name)", py_lvv_get_props);
+    py_bind(mod, "screen_info()", py_lvv_screen_info);
+    py_bind(mod, "load_object_map(path)", py_lvv_load_object_map);
+    py_bind(mod, "wait_for(name, timeout)", py_lvv_wait_for);
+    py_bind(mod, "wait_until(name, prop, value, timeout)", py_lvv_wait_until);
+}
+
+} // namespace lvv
