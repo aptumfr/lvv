@@ -14,6 +14,12 @@
 #include <string.h>
 #include <errno.h>
 
+/* LVGL private headers for strip-based rendering */
+#include "src/draw/lv_draw_private.h"
+#include "src/core/lv_obj_draw_private.h"
+#include "src/core/lv_refr_private.h"
+#include "src/display/lv_display_private.h"
+
 /* POSIX networking */
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -26,8 +32,9 @@
 
 #define LVV_VERSION       "0.1.0"
 #define LVV_MAX_CMD_LEN   4096
-#define LVV_MAX_RESP_LEN  (4 * 1024 * 1024)  /* 4MB for tree/screenshot */
+#define LVV_MAX_RESP_LEN  (1 * 1024 * 1024)  /* 1MB for tree responses */
 #define LVV_MAX_TREE_DEPTH 32
+#define LVV_STRIP_HEIGHT   60  /* rows per screenshot strip */
 
 /* ======================== State ======================== */
 
@@ -445,12 +452,73 @@ static void inject_key_text(const char* text) {
 /* Forward declaration for binary screenshot */
 static void send_response(void);
 
-/* ======================== Screenshot ======================== */
+/* ======================== Screenshot (strip-based) ======================== */
 
-#if LV_USE_SNAPSHOT
+/* Send raw bytes over TCP. Returns false on error. */
+static bool send_raw(const uint8_t* data, int size) {
+    if (s_client_fd < 0) return false;
+    int total = 0;
+    while (total < size) {
+        int n = (int)send(s_client_fd, data + total, size - total, MSG_NOSIGNAL);
+        if (n <= 0) {
+            close(s_client_fd);
+            s_client_fd = -1;
+            return false;
+        }
+        total += n;
+    }
+    return true;
+}
 
-/* Binary screenshot: JSON header line + raw pixel bytes (no base64).
- * The caller must NOT call send_response() after this — it handles its own I/O. */
+/* Render one horizontal strip of the screen into draw_buf and send it.
+ * The layer/display context must already be set up by the caller. */
+static bool render_and_send_strip(lv_obj_t* screen, lv_draw_buf_t* draw_buf,
+                                  lv_display_t* disp, int32_t scr_w,
+                                  int32_t y0, int32_t y1, lv_color_format_t cf) {
+    int32_t rows = y1 - y0 + 1;
+    int stride = (int)draw_buf->header.stride;
+
+    lv_draw_buf_clear(draw_buf, NULL);
+
+    lv_layer_t layer;
+    lv_layer_init(&layer);
+
+    layer.draw_buf = draw_buf;
+    layer.buf_area.x1 = 0;
+    layer.buf_area.y1 = y0;
+    layer.buf_area.x2 = scr_w - 1;
+    layer.buf_area.y2 = y0 + (int32_t)draw_buf->header.h - 1;
+    layer.color_format = cf;
+    layer._clip_area.x1 = 0;
+    layer._clip_area.y1 = y0;
+    layer._clip_area.x2 = scr_w - 1;
+    layer._clip_area.y2 = y1;
+    layer.phy_clip_area = layer._clip_area;
+
+    lv_draw_unit_send_event(NULL, LV_EVENT_CHILD_CREATED, &layer);
+
+    lv_layer_t* layer_old = disp->layer_head;
+    disp->layer_head = &layer;
+
+    lv_obj_redraw(&layer, screen);
+
+    layer.all_tasks_added = true;
+    while (layer.draw_task_head) {
+        lv_draw_dispatch_wait_for_request();
+        lv_draw_dispatch();
+    }
+
+    disp->layer_head = layer_old;
+
+    lv_draw_unit_send_event(NULL, LV_EVENT_SCREEN_LOAD_START, &layer);
+    lv_draw_unit_send_event(NULL, LV_EVENT_CHILD_DELETED, &layer);
+
+    return send_raw(draw_buf->data, stride * rows);
+}
+
+/* Strip-based screenshot: renders the screen in horizontal strips,
+ * sending each strip's pixels immediately over TCP. Peak memory is
+ * strip_height * stride instead of full_height * stride. */
 static void cmd_screenshot(void) {
     lv_obj_t* screen = lv_screen_active();
     if (!screen) {
@@ -459,28 +527,54 @@ static void cmd_screenshot(void) {
         return;
     }
 
-    lv_draw_buf_t* buf = lv_snapshot_take(screen, LV_COLOR_FORMAT_ARGB8888);
-    if (!buf) {
+    lv_obj_update_layout(screen);
+
+    lv_display_t* disp = lv_display_get_default();
+    if (!disp) {
         resp_reset();
-        resp_append("{\"error\":\"Snapshot failed\"}");
+        resp_append("{\"error\":\"No display\"}");
         return;
     }
 
-    int w = buf->header.w;
-    int h = buf->header.h;
-    int cf = (int)buf->header.cf;
-    uint8_t* pixels = buf->data;
-    int stride = buf->header.stride;
-    int data_size = stride * h;
+    int32_t scr_w = lv_display_get_horizontal_resolution(disp);
+    int32_t scr_h = lv_display_get_vertical_resolution(disp);
 
-    /* Send JSON header line with data_size */
+    /* Use the display's native format when the host decoder supports it,
+     * otherwise fall back to ARGB8888. This avoids a pixel conversion
+     * inside LVGL and halves transfer size on RGB565 boards. */
+    lv_color_format_t cf = lv_display_get_color_format(disp);
+    switch (cf) {
+        case LV_COLOR_FORMAT_RGB565:
+        case LV_COLOR_FORMAT_RGB888:
+        case LV_COLOR_FORMAT_XRGB8888:
+        case LV_COLOR_FORMAT_ARGB8888:
+            break;  /* supported by host decoder */
+        default:
+            cf = LV_COLOR_FORMAT_ARGB8888;  /* safe fallback */
+            break;
+    }
+
+    int strip_h = LVV_STRIP_HEIGHT;
+
+    /* Create strip buffer (reused across strips) */
+    lv_draw_buf_t* strip_buf = lv_draw_buf_create(scr_w, strip_h, cf, LV_STRIDE_AUTO);
+    if (!strip_buf) {
+        resp_reset();
+        resp_append("{\"error\":\"Failed to allocate strip buffer\"}");
+        return;
+    }
+
+    int stride = (int)strip_buf->header.stride;
+    int data_size = stride * (int)scr_h;
+
+    /* Send JSON header — same format as before, host sees no difference */
     resp_reset();
     resp_append("{\"format\":");
-    resp_append_int(cf);
+    resp_append_int((int)cf);
     resp_append(",\"width\":");
-    resp_append_int(w);
+    resp_append_int(scr_w);
     resp_append(",\"height\":");
-    resp_append_int(h);
+    resp_append_int(scr_h);
     resp_append(",\"stride\":");
     resp_append_int(stride);
     resp_append(",\"data_size\":");
@@ -488,34 +582,26 @@ static void cmd_screenshot(void) {
     resp_append("}");
     send_response();
 
-    /* Send raw pixel bytes directly */
-    if (s_client_fd >= 0) {
-        int total = 0;
-        while (total < data_size) {
-            int n = (int)send(s_client_fd, pixels + total,
-                              data_size - total, MSG_NOSIGNAL);
-            if (n <= 0) {
-                close(s_client_fd);
-                s_client_fd = -1;
-                break;
-            }
-            total += n;
+    /* Set up display refresh context (once, outside the loop) */
+    lv_display_t* disp_old = lv_refr_get_disp_refreshing();
+    lv_refr_set_disp_refreshing(disp);
+
+    /* Render and send each strip */
+    for (int32_t y = 0; y < scr_h; y += strip_h) {
+        int32_t y_end = y + strip_h - 1;
+        if (y_end >= scr_h) y_end = scr_h - 1;
+
+        if (!render_and_send_strip(screen, strip_buf, disp, scr_w, y, y_end, cf)) {
+            break;  /* client disconnected */
         }
     }
 
-    lv_draw_buf_destroy(buf);
+    lv_refr_set_disp_refreshing(disp_old);
+    lv_draw_buf_destroy(strip_buf);
+
     /* Clear resp so send_response() in caller is a no-op */
     resp_reset();
 }
-
-#else /* !LV_USE_SNAPSHOT */
-
-static void cmd_screenshot(void) {
-    resp_reset();
-    resp_append("{\"error\":\"Snapshot not enabled. Set LV_USE_SNAPSHOT=1 in lv_conf.h\"}");
-}
-
-#endif /* LV_USE_SNAPSHOT */
 
 /* ======================== Command Processing ======================== */
 
