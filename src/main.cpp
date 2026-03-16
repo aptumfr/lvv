@@ -1,4 +1,5 @@
 #include "app/app.hpp"
+#include "core/log.hpp"
 #include <CLI11.hpp>
 #include <iostream>
 
@@ -7,6 +8,7 @@ int main(int argc, char** argv) {
     cli.require_subcommand(1);
 
     lvv::AppConfig config;
+    config.static_dir = lvv::default_static_dir();
 
     // Global connection options
     cli.add_option("--host", config.target_host, "Target host")
@@ -17,6 +19,7 @@ int main(int argc, char** argv) {
                    "Serial device (e.g. /dev/ttyUSB0)");
     cli.add_option("--baud", config.serial_baud, "Serial baud rate")
         ->default_val(115200);
+    cli.add_flag("--verbose,-v", config.verbose, "Verbose output (debug logging)");
 
     // --- ping ---
     auto* ping_cmd = cli.add_subcommand("ping", "Ping the target");
@@ -45,16 +48,27 @@ int main(int argc, char** argv) {
         ->default_val(0.1);
     run_cmd->add_option("--timeout", config.timeout, "Per-test timeout (seconds)")
         ->default_val(30.0);
-    run_cmd->add_flag("--verbose", config.verbose, "Verbose output");
-
     // --- serve ---
     auto* serve_cmd = cli.add_subcommand("serve", "Start web UI server");
     serve_cmd->add_option("--web-port", config.web_port, "Web server port")
         ->default_val(8080);
     serve_cmd->add_option("--static-dir", config.static_dir,
                           "Static files directory (React build)");
+    serve_cmd->add_option("--ref-images", config.ref_images_dir,
+                          "Reference images directory")
+        ->default_val("ref_images");
+    serve_cmd->add_option("--threshold", config.diff_threshold,
+                          "Visual diff threshold %")
+        ->default_val(0.1);
+    serve_cmd->add_option("--timeout", config.timeout, "Per-test timeout (seconds)")
+        ->default_val(30.0);
 
     CLI11_PARSE(cli, argc, argv);
+
+    lvv::log::init();
+    if (config.verbose) {
+        lvv::log::set_level(quill::LogLevel::Debug);
+    }
 
     lvv::App app;
 

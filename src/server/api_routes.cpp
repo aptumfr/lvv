@@ -9,8 +9,29 @@
 
 #include <json.hpp>
 #include <filesystem>
+#include <functional>
 
 namespace lvv {
+
+// Wraps a lambda returning JSON into a crow::response with error handling
+static crow::response json_route(std::function<nlohmann::json()> fn) {
+    try {
+        crow::response resp(fn().dump());
+        resp.set_header("Content-Type", "application/json");
+        return resp;
+    } catch (const std::exception& e) {
+        nlohmann::json err;
+        err["error"] = e.what();
+        return crow::response(500, err.dump());
+    }
+}
+
+// Parse JSON body, return 400 on failure
+static std::optional<nlohmann::json> parse_body(const crow::request& req) {
+    auto j = nlohmann::json::parse(req.body, nullptr, false);
+    if (j.is_discarded()) return std::nullopt;
+    return j;
+}
 
 void register_api_routes(CrowApp& app,
                          Protocol* protocol,
@@ -21,39 +42,30 @@ void register_api_routes(CrowApp& app,
     // Health check
     CROW_ROUTE(app, "/api/health")
     ([protocol, ws]() {
-        nlohmann::json j;
-        j["status"] = "ok";
-        j["connected"] = protocol->is_connected();
-        j["streaming"] = ws->is_streaming();
-        j["clients"] = ws->client_count();
-
-        crow::response resp(j.dump());
-        resp.set_header("Content-Type", "application/json");
-        return resp;
+        return json_route([&]() -> nlohmann::json {
+            return {{"status", "ok"},
+                    {"connected", protocol->is_connected()},
+                    {"streaming", ws->is_streaming()},
+                    {"clients", ws->client_count()}};
+        });
     });
 
     // Connect to target
     CROW_ROUTE(app, "/api/connect").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded()) {
-            return crow::response(400, "Invalid JSON");
-        }
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, "Invalid JSON");
 
-        // For now, TCP only
-        // Host/port come from the app config, not per-request
         bool ok = protocol->connect();
-        nlohmann::json j;
-        j["connected"] = ok;
-
-        crow::response resp(ok ? 200 : 500, j.dump());
-        resp.set_header("Content-Type", "application/json");
-        return resp;
+        return json_route([&]() -> nlohmann::json {
+            return {{"connected", ok}};
+        });
     });
 
     // Disconnect
     CROW_ROUTE(app, "/api/disconnect").methods("POST"_method)
-    ([protocol]() {
+    ([protocol, ws]() {
+        ws->stop_streaming();
         protocol->disconnect();
         return crow::response(200, R"({"disconnected":true})");
     });
@@ -61,21 +73,15 @@ void register_api_routes(CrowApp& app,
     // Get widget tree
     CROW_ROUTE(app, "/api/tree")
     ([protocol, tree]() {
-        try {
+        return json_route([&]() -> nlohmann::json {
             auto tree_json = protocol->get_tree();
+            std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
-
-            crow::response resp(tree->to_json().dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+            return tree->to_json();
+        });
     });
 
-    // Get screenshot as PNG
+    // Get screenshot as PNG (binary response — can't use json_route)
     CROW_ROUTE(app, "/api/screenshot")
     ([protocol]() {
         try {
@@ -83,12 +89,11 @@ void register_api_routes(CrowApp& app,
             if (!img.valid()) {
                 return crow::response(500, "Failed to capture screenshot");
             }
-
             auto png_data = encode_png(img);
             crow::response resp;
             resp.code = 200;
             resp.set_header("Content-Type", "image/png");
-            resp.body = std::string(
+            resp.body.assign(
                 reinterpret_cast<const char*>(png_data.data()), png_data.size());
             return resp;
         } catch (const std::exception& e) {
@@ -99,223 +104,126 @@ void register_api_routes(CrowApp& app,
     // Click widget
     CROW_ROUTE(app, "/api/click").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded()) {
-            return crow::response(400, "Invalid JSON");
-        }
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, "Invalid JSON");
 
-        try {
-            bool ok;
-            if (body.contains("name")) {
-                ok = protocol->click(body["name"].get<std::string>());
-            } else if (body.contains("x") && body.contains("y")) {
-                ok = protocol->click_at(body["x"].get<int>(), body["y"].get<int>());
-            } else {
-                return crow::response(400, R"({"error":"Need 'name' or 'x','y'"})");
-            }
-
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
+        if (body->contains("name")) {
+            bool ok = protocol->click((*body)["name"].get<std::string>());
+            return json_route([&]() -> nlohmann::json { return {{"success", ok}}; });
+        } else if (body->contains("x") && body->contains("y")) {
+            bool ok = protocol->click_at((*body)["x"].get<int>(), (*body)["y"].get<int>());
+            return json_route([&]() -> nlohmann::json { return {{"success", ok}}; });
         }
+        return crow::response(400, R"({"error":"Need 'name' or 'x','y'"})");
     });
 
     // Pointer press
     CROW_ROUTE(app, "/api/press").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("x") || !body.contains("y")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("x") || !body->contains("y"))
             return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-        }
 
-        try {
-            bool ok = protocol->press(body["x"].get<int>(), body["y"].get<int>());
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->press((*body)["x"].get<int>(),
+                                                (*body)["y"].get<int>())}};
+        });
     });
 
     // Pointer move
     CROW_ROUTE(app, "/api/move").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("x") || !body.contains("y")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("x") || !body->contains("y"))
             return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-        }
 
-        try {
-            bool ok = protocol->move_to(body["x"].get<int>(), body["y"].get<int>());
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->move_to((*body)["x"].get<int>(),
+                                                  (*body)["y"].get<int>())}};
+        });
     });
 
     // Pointer release
     CROW_ROUTE(app, "/api/release").methods("POST"_method)
     ([protocol]() {
-        try {
-            bool ok = protocol->release();
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->release()}};
+        });
     });
 
     // Type text
     CROW_ROUTE(app, "/api/type").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("text")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("text"))
             return crow::response(400, R"({"error":"Need 'text'"})");
-        }
 
-        try {
-            bool ok = protocol->type_text(body["text"].get<std::string>());
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->type_text((*body)["text"].get<std::string>())}};
+        });
     });
 
     // Send key
     CROW_ROUTE(app, "/api/key").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("key")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("key"))
             return crow::response(400, R"({"error":"Need 'key'"})");
-        }
 
-        try {
-            bool ok = protocol->key(body["key"].get<std::string>());
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->key((*body)["key"].get<std::string>())}};
+        });
     });
 
     // Swipe
     CROW_ROUTE(app, "/api/swipe").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded()) {
-            return crow::response(400, "Invalid JSON");
-        }
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, "Invalid JSON");
 
-        try {
-            bool ok = protocol->swipe(
-                body.value("x", 0), body.value("y", 0),
-                body.value("x_end", 0), body.value("y_end", 0),
-                body.value("duration", 300));
-
-            nlohmann::json j;
-            j["success"] = ok;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->swipe(
+                body->value("x", 0), body->value("y", 0),
+                body->value("x_end", 0), body->value("y_end", 0),
+                body->value("duration", 300))}};
+        });
     });
 
     // Get widget properties
     CROW_ROUTE(app, "/api/widget/<string>")
     ([protocol](const std::string& name) {
-        try {
-            auto props = protocol->get_props(name);
-            crow::response resp(props.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return protocol->get_props(name);
+        });
     });
 
     // Get screen info
     CROW_ROUTE(app, "/api/screen-info")
     ([protocol]() {
-        try {
+        return json_route([&]() -> nlohmann::json {
             auto info = protocol->get_screen_info();
-            nlohmann::json j;
-            j["width"] = info.width;
-            j["height"] = info.height;
-            j["color_format"] = info.color_format;
-
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+            return {{"width", info.width},
+                    {"height", info.height},
+                    {"color_format", info.color_format}};
+        });
     });
 
     // Run test(s)
     CROW_ROUTE(app, "/api/test/run").methods("POST"_method)
     ([script_engine, test_runner](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded()) {
-            return crow::response(400, "Invalid JSON");
-        }
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, "Invalid JSON");
 
-        try {
-            if (body.contains("code")) {
-                // Run inline code
+        if (body->contains("code")) {
+            return json_route([&]() -> nlohmann::json {
                 auto [success, output] = script_engine->run_string(
-                    body["code"].get<std::string>());
-
-                nlohmann::json j;
-                j["success"] = success;
-                j["output"] = output;
-                crow::response resp(j.dump());
-                resp.set_header("Content-Type", "application/json");
-                return resp;
-            } else if (body.contains("files")) {
-                // Run test files
+                    (*body)["code"].get<std::string>());
+                return {{"success", success}, {"output", output}};
+            });
+        } else if (body->contains("files")) {
+            return json_route([&]() -> nlohmann::json {
                 std::vector<std::string> files;
-                for (const auto& f : body["files"]) {
+                for (const auto& f : (*body)["files"]) {
                     files.push_back(f.get<std::string>());
                 }
                 auto suite = test_runner->run_suite("api_run", files);
@@ -326,55 +234,40 @@ void register_api_routes(CrowApp& app,
                 j["pass_count"] = suite.passed();
                 j["fail_count"] = suite.failed();
                 j["duration"] = suite.total_duration_seconds;
-
                 j["tests"] = nlohmann::json::array();
                 for (const auto& t : suite.tests) {
-                    nlohmann::json tj;
-                    tj["name"] = t.name;
-                    tj["status"] = (t.status == TestStatus::Pass) ? "pass" : "fail";
-                    tj["duration"] = t.duration_seconds;
-                    tj["message"] = t.message;
-                    tj["output"] = t.output;
-                    j["tests"].push_back(tj);
+                    j["tests"].push_back({
+                        {"name", t.name},
+                        {"status", (t.status == TestStatus::Pass) ? "pass" : "fail"},
+                        {"duration", t.duration_seconds},
+                        {"message", t.message},
+                        {"output", t.output}
+                    });
                 }
-
-                crow::response resp(j.dump());
-                resp.set_header("Content-Type", "application/json");
-                return resp;
-            }
-
-            return crow::response(400, R"({"error":"Need 'code' or 'files'"})");
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
+                return j;
+            });
         }
+
+        return crow::response(400, R"({"error":"Need 'code' or 'files'"})");
     });
 
     // Find widget at coordinates (for smart recording)
     CROW_ROUTE(app, "/api/find-at").methods("POST"_method)
     ([protocol, tree](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("x") || !body.contains("y")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("x") || !body->contains("y"))
             return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-        }
 
-        try {
-            int x = body["x"].get<int>();
-            int y = body["y"].get<int>();
+        return json_route([&]() -> nlohmann::json {
+            int x = (*body)["x"].get<int>();
+            int y = (*body)["y"].get<int>();
 
-            // First refresh the tree
             auto tree_json = protocol->get_tree();
+            std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
 
             auto widget = tree->find_at(x, y);
-            if (!widget) {
-                nlohmann::json j;
-                j["found"] = false;
-                crow::response resp(j.dump());
-                resp.set_header("Content-Type", "application/json");
-                return resp;
-            }
+            if (!widget) return {{"found", false}};
 
             nlohmann::json j;
             j["found"] = true;
@@ -387,100 +280,60 @@ void register_api_routes(CrowApp& app,
             j["width"] = widget->width;
             j["height"] = widget->height;
 
-            // Best selector for recording
-            if (!widget->name.empty()) {
-                j["selector"] = widget->name;
-            } else if (!widget->auto_path.empty()) {
-                j["selector"] = widget->auto_path;
-            } else {
-                j["selector"] = nullptr;
-            }
+            if (!widget->name.empty()) j["selector"] = widget->name;
+            else if (!widget->auto_path.empty()) j["selector"] = widget->auto_path;
+            else j["selector"] = nullptr;
 
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+            return j;
+        });
     });
 
     // Visual diff comparison
     CROW_ROUTE(app, "/api/visual/compare").methods("POST"_method)
     ([protocol](const crow::request& req) {
-        auto body = nlohmann::json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.contains("reference")) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("reference"))
             return crow::response(400, R"({"error":"Need 'reference' image path"})");
-        }
 
-        try {
-            // Take current screenshot
+        // Sandbox reference path to current working directory
+        auto ref_path = (*body)["reference"].get<std::string>();
+        auto base_dir = std::filesystem::current_path().string() + "/";
+        auto canonical = std::filesystem::weakly_canonical(ref_path).string();
+        if (canonical.rfind(base_dir, 0) != 0)
+            return crow::response(403, R"({"error":"Reference path outside working directory"})");
+
+        return json_route([&]() -> nlohmann::json {
             auto actual = protocol->screenshot();
-            if (!actual.valid()) {
-                return crow::response(500, R"({"error":"Failed to capture screenshot"})");
-            }
-
-            // Sandbox reference path to current working directory
-            auto ref_path = body["reference"].get<std::string>();
-            auto base_dir = std::filesystem::current_path().string();
-            auto canonical = std::filesystem::weakly_canonical(ref_path).string();
-            if (canonical.find(base_dir) != 0) {
-                return crow::response(403, R"({"error":"Reference path outside working directory"})");
-            }
+            if (!actual.valid()) throw std::runtime_error("Failed to capture screenshot");
 
             auto reference = load_png(ref_path);
-
             if (!reference.valid()) {
-                // First run: create reference
-                save_png(actual, ref_path);
-                nlohmann::json j;
-                j["first_run"] = true;
-                j["passed"] = true;
-                j["message"] = "Reference image created";
-                crow::response resp(j.dump());
-                resp.set_header("Content-Type", "application/json");
-                return resp;
+                auto parent = std::filesystem::path(ref_path).parent_path();
+                if (!parent.empty()) std::filesystem::create_directories(parent);
+                if (!save_png(actual, ref_path))
+                    throw std::runtime_error("Failed to write reference image");
+                return {{"first_run", true}, {"passed", true},
+                        {"message", "Reference image created"}};
             }
 
             CompareOptions opts;
-            opts.diff_threshold = body.value("threshold", 0.1);
-            opts.color_threshold = body.value("color_threshold", 10.0);
-
+            opts.diff_threshold = body->value("threshold", 0.1);
+            opts.color_threshold = body->value("color_threshold", 10.0);
             auto diff = compare_images(reference, actual, opts);
 
-            nlohmann::json j;
-            j["passed"] = diff.passed;
-            j["identical"] = diff.identical;
-            j["diff_percentage"] = diff.diff_percentage;
-            j["diff_pixels"] = diff.diff_pixels;
-            j["total_pixels"] = diff.total_pixels;
-
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+            return {{"passed", diff.passed}, {"identical", diff.identical},
+                    {"diff_percentage", diff.diff_percentage},
+                    {"diff_pixels", diff.diff_pixels},
+                    {"total_pixels", diff.total_pixels}};
+        });
     });
 
     // Ping target
     CROW_ROUTE(app, "/api/ping")
     ([protocol]() {
-        try {
-            auto version = protocol->ping();
-            nlohmann::json j;
-            j["version"] = version;
-            crow::response resp(j.dump());
-            resp.set_header("Content-Type", "application/json");
-            return resp;
-        } catch (const std::exception& e) {
-            nlohmann::json err;
-            err["error"] = e.what();
-            return crow::response(500, err.dump());
-        }
+        return json_route([&]() -> nlohmann::json {
+            return {{"version", protocol->ping()}};
+        });
     });
 }
 

@@ -9,10 +9,14 @@
 
 namespace lvv {
 
-static std::atomic<bool> s_cancelled{false};
+static thread_local ScriptEngine* s_active_engine = nullptr;
 
-std::atomic<bool>& ScriptEngine::cancelled() {
-    return s_cancelled;
+void ScriptEngine::set_active(ScriptEngine* engine) {
+    s_active_engine = engine;
+}
+
+ScriptEngine* ScriptEngine::active() {
+    return s_active_engine;
 }
 
 // Captured output from PocketPy print callback
@@ -55,6 +59,7 @@ void ScriptEngine::thread_main() {
         lock.unlock();
 
         // Run outside the lock — reset state for isolation
+        s_active_engine = this;
         s_captured_output.clear();
         lvv_module_reset_state();
 
@@ -62,7 +67,18 @@ void ScriptEngine::thread_main() {
         auto old_print = cb->print;
         cb->print = capture_print;
 
+        // Arm PocketPy's built-in watchdog to interrupt pure Python loops
+        double timeout = timeout_seconds_;
+        if (timeout > 0) {
+            py_watchdog_begin(static_cast<int64_t>(timeout * 1000));
+        }
+
         bool success = py_exec(code.c_str(), "<test>", EXEC_MODE, nullptr);
+
+        if (timeout > 0) {
+            py_watchdog_end();
+        }
+
         std::pair<bool, std::string> result;
 
         if (!success) {
@@ -114,7 +130,7 @@ std::pair<bool, std::string> ScriptEngine::run_string(const std::string& code) {
         }
     }
 
-    s_cancelled.store(false);
+    cancelled_.store(false);
     pending_code_ = code;
     has_work_ = true;
     work_done_ = false;
@@ -125,7 +141,7 @@ std::pair<bool, std::string> ScriptEngine::run_string(const std::string& code) {
         auto deadline = std::chrono::steady_clock::now()
                       + std::chrono::duration<double>(timeout_seconds_);
         if (!cv_done_.wait_until(lock, deadline, [this] { return work_done_; })) {
-            s_cancelled.store(true);  // signal lvv_module functions to bail out
+            cancelled_.store(true);  // signal lvv_module functions to bail out
             return {false, "Script execution timed out (" +
                     std::to_string(static_cast<int>(timeout_seconds_)) + "s)"};
         }

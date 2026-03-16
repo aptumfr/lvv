@@ -64,7 +64,6 @@ DiffResult compare_images(const Image& reference, const Image& actual,
 
     const int w = reference.width;
     const int h = reference.height;
-    result.total_pixels = w * h;
 
     // Create diff image (transparent green = same, red = different)
     result.diff_image.width = w;
@@ -73,13 +72,15 @@ DiffResult compare_images(const Image& reference, const Image& actual,
     result.diff_image.pixels.resize(w * h * 4);
 
     int diff_count = 0;
+    int ignored_count = 0;
 
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             if (in_ignore_region(x, y, opts.ignore_regions)) {
-                // Gray for ignored
+                // Gray for ignored — excluded from total
                 auto* dp = result.diff_image.pixels.data() + (y * w + x) * 4;
                 dp[0] = 128; dp[1] = 128; dp[2] = 128; dp[3] = 255;
+                ignored_count++;
                 continue;
             }
 
@@ -114,6 +115,7 @@ DiffResult compare_images(const Image& reference, const Image& actual,
         }
     }
 
+    result.total_pixels = w * h - ignored_count;
     result.diff_pixels = diff_count;
     result.diff_percentage = (result.total_pixels > 0)
         ? (100.0 * diff_count / result.total_pixels)

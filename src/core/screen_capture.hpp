@@ -30,6 +30,9 @@ Image decode_raw_pixels(const std::vector<uint8_t>& raw, int width, int height,
 /// Encode an Image to PNG data
 std::vector<uint8_t> encode_png(const Image& img);
 
+/// Encode an Image to JPEG data (faster than PNG, suitable for streaming)
+std::vector<uint8_t> encode_jpeg(const Image& img, int quality = 80);
+
 /// Save an Image to a PNG file
 bool save_png(const Image& img, const std::string& path);
 

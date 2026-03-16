@@ -82,6 +82,11 @@ bool SerialTransport::connect() {
     return true;
 }
 
+void SerialTransport::abort() {
+    // Serial reads use poll() with timeouts, so they'll unblock naturally.
+    // No equivalent to socket shutdown() for serial fds.
+}
+
 void SerialTransport::disconnect() {
     if (fd_ >= 0) {
         ::close(fd_);

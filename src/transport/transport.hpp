@@ -17,6 +17,10 @@ public:
     virtual void disconnect() = 0;
     virtual bool is_connected() const = 0;
 
+    /// Signal the transport to abort any blocking I/O. Thread-safe.
+    /// Does NOT close or clean up — call disconnect() afterwards.
+    virtual void abort() = 0;
+
     /// Send data (newline-delimited JSON line)
     virtual bool send(std::string_view data) = 0;
 

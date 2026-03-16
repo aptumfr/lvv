@@ -92,8 +92,8 @@ Image decode_raw_pixels(const std::vector<uint8_t>& raw, int width, int height,
     return img;
 }
 
-// Callback for stbi_write_png_to_func
-static void write_png_callback(void* context, void* data, int size) {
+// Callback for stbi_write_*_to_func
+static void write_callback(void* context, void* data, int size) {
     auto* out = static_cast<std::vector<uint8_t>*>(context);
     auto* bytes = static_cast<uint8_t*>(data);
     out->insert(out->end(), bytes, bytes + size);
@@ -102,9 +102,29 @@ static void write_png_callback(void* context, void* data, int size) {
 std::vector<uint8_t> encode_png(const Image& img) {
     std::vector<uint8_t> out;
     stbi_write_png_to_func(
-        write_png_callback, &out,
+        write_callback, &out,
         img.width, img.height, img.channels,
         img.pixels.data(), img.width * img.channels);
+    return out;
+}
+
+std::vector<uint8_t> encode_jpeg(const Image& img, int quality) {
+    std::vector<uint8_t> out;
+    // stb JPEG expects RGB (3 channels), strip alpha
+    std::vector<uint8_t> rgb(static_cast<size_t>(img.width) * img.height * 3);
+    const uint8_t* src = img.pixels.data();
+    uint8_t* dst = rgb.data();
+    for (int i = 0; i < img.width * img.height; i++) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        src += 4;
+        dst += 3;
+    }
+    stbi_write_jpg_to_func(
+        write_callback, &out,
+        img.width, img.height, 3,
+        rgb.data(), quality);
     return out;
 }
 

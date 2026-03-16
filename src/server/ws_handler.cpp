@@ -23,8 +23,15 @@ void WSHandler::setup(crow::App<crow::CORSHandler>& app, Protocol* protocol) {
         })
         .onclose([this](crow::websocket::connection& conn,
                          const std::string&, uint16_t) {
-            std::lock_guard lock(mutex_);
-            clients_.erase(&conn);
+            bool should_stop = false;
+            {
+                std::lock_guard lock(mutex_);
+                clients_.erase(&conn);
+                if (clients_.empty() && streaming_.load()) {
+                    should_stop = true;
+                }
+            }
+            if (should_stop) stop_streaming();
         })
         .onmessage([this](crow::websocket::connection&,
                            const std::string& data, bool) {
@@ -92,20 +99,32 @@ void WSHandler::start_streaming(int fps) {
     if (streaming_.load()) return;
     if (!protocol_ || !protocol_->is_connected()) return;
 
+    // Join a previous stream thread that exited on its own (error/disconnect)
+    // before overwriting it, to avoid std::terminate on a joinable thread.
+    if (stream_thread_.joinable()) {
+        stream_thread_.join();
+    }
+
     streaming_ = true;
     auto interval = std::chrono::milliseconds(1000 / std::max(fps, 1));
 
     stream_thread_ = std::thread([this, interval]() {
         auto next_frame = std::chrono::steady_clock::now();
         while (streaming_.load()) {
+            if (!protocol_->is_connected()) {
+                streaming_ = false;
+                break;
+            }
             try {
                 auto img = protocol_->screenshot();
                 if (img.valid()) {
-                    auto png = encode_png(img);
-                    broadcast_binary(png);
+                    auto jpeg = encode_jpeg(img, 80);
+                    broadcast_binary(jpeg);
                 }
             } catch (...) {
-                // Target disconnected or error — keep trying
+                // Screenshot failed — stop streaming rather than spinning
+                streaming_ = false;
+                break;
             }
             // Deadline-based pacing: skip frames if capture took too long
             next_frame += interval;
@@ -127,9 +146,8 @@ void WSHandler::stop_streaming() {
 }
 
 size_t WSHandler::client_count() const {
-    auto& self = const_cast<WSHandler&>(*this);
-    std::lock_guard lock(self.mutex_);
-    return self.clients_.size();
+    std::lock_guard lock(mutex_);
+    return clients_.size();
 }
 
 } // namespace lvv

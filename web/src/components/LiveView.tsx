@@ -10,18 +10,22 @@ interface Point {
 
 export function LiveView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const ws = useWebSocket('/ws');
-  const { connected, recording, addRecordedStep, setSelectedWidget } = useAppStore();
   const [streaming, setStreaming] = useState(false);
+  const ws = useWebSocket('/ws', () => setStreaming(false));
+  const { connected, recording, addRecordedStep, setSelectedWidget } = useAppStore();
+  const canInteract = connected && ws.connected;
   const [hoverInfo, setHoverInfo] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
 
-  // Draw frames from WebSocket
+  // Draw frames from WebSocket with sequencing to prevent out-of-order rendering
+  const frameSeq = useRef(0);
   useEffect(() => {
     if (!ws.lastFrame || !canvasRef.current) return;
+    const seq = ++frameSeq.current;
     const img = new Image();
     img.onload = () => {
+      if (seq !== frameSeq.current) return; // stale frame, drop it
       const canvas = canvasRef.current!;
       canvas.width = img.width;
       canvas.height = img.height;
@@ -30,6 +34,22 @@ export function LiveView() {
     };
     img.src = ws.lastFrame;
   }, [ws.lastFrame]);
+
+  // Gray-fill the canvas when target disconnects
+  useEffect(() => {
+    if (connected) return;
+    setStreaming(false);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#334155'; // slate-700
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#94a3b8'; // slate-400
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Disconnected', canvas.width / 2, canvas.height / 2);
+  }, [connected]);
 
   const getCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -59,7 +79,7 @@ export function LiveView() {
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const coords = getCanvasCoords(e);
-    if (!coords || !connected) return;
+    if (!coords || !canInteract) return;
 
     setDragStart(coords);
     setDragCurrent(coords);
@@ -68,7 +88,7 @@ export function LiveView() {
 
   const handleMouseUp = async (e: React.MouseEvent<HTMLCanvasElement>) => {
     const coords = getCanvasCoords(e);
-    if (!coords || !connected) {
+    if (!coords || !canInteract) {
       setDragStart(null);
       setDragCurrent(null);
       return;
@@ -122,7 +142,7 @@ export function LiveView() {
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!connected) return;
+    if (!canInteract) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
     setHoverInfo(`${coords.x}, ${coords.y}`);
@@ -153,7 +173,7 @@ export function LiveView() {
         <h2 className="text-sm font-semibold">Live View</h2>
         <button
           onClick={toggleStream}
-          disabled={!connected}
+          disabled={!canInteract}
           className={`px-2 py-1 text-xs rounded ${
             streaming ? 'bg-red-600 hover:bg-red-500' : 'bg-green-600 hover:bg-green-500'
           } disabled:opacity-50`}
@@ -162,7 +182,7 @@ export function LiveView() {
         </button>
         <button
           onClick={takeScreenshot}
-          disabled={!connected}
+          disabled={!canInteract}
           className="px-2 py-1 text-xs bg-slate-600 hover:bg-slate-500 rounded disabled:opacity-50"
         >
           Screenshot

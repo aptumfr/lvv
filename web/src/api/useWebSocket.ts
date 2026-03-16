@@ -1,12 +1,14 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-export function useWebSocket(url: string) {
+export function useWebSocket(url: string, onDisconnect?: () => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [lastFrame, setLastFrame] = useState<string | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const onDisconnectRef = useRef(onDisconnect);
+  onDisconnectRef.current = onDisconnect;
 
   const connectWs = useCallback(() => {
     if (!mountedRef.current) return;
@@ -20,6 +22,7 @@ export function useWebSocket(url: string) {
     ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
+      onDisconnectRef.current?.();
       if (mountedRef.current) {
         reconnectTimer.current = setTimeout(connectWs, 2000);
       }
@@ -27,7 +30,7 @@ export function useWebSocket(url: string) {
 
     ws.onmessage = (event) => {
       if (event.data instanceof Blob) {
-        // Binary message = PNG frame
+        // Binary message = JPEG frame
         if (prevFrameUrl.current) {
           URL.revokeObjectURL(prevFrameUrl.current);
         }

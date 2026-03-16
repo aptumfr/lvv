@@ -39,7 +39,10 @@ export function VisualDiffViewer() {
         <input
           type="number"
           value={threshold}
-          onChange={(e) => setThreshold(parseFloat(e.target.value))}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value);
+            setThreshold(Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0.1);
+          }}
           step={0.01}
           min={0}
           max={100}

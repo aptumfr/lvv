@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <mutex>
 
 namespace lvv {
 
@@ -29,6 +30,9 @@ public:
     nlohmann::json to_json() const;
 
     bool empty() const { return root_.children.empty() && root_.name.empty(); }
+
+    /// Lock for thread-safe access from concurrent Crow handlers
+    mutable std::mutex mutex;
 
 private:
     WidgetInfo root_;

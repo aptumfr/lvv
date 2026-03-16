@@ -39,7 +39,7 @@ public:
 private:
     void handle_interaction(const nlohmann::json& j);
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::set<crow::websocket::connection*> clients_;
 
     std::atomic<bool> streaming_{false};

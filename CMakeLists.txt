@@ -11,7 +11,7 @@ find_package(Threads REQUIRED)
 # PocketPy (C library)
 add_library(pocketpy STATIC third_party/pocketpy/pocketpy.c)
 target_include_directories(pocketpy PUBLIC third_party/pocketpy)
-target_compile_definitions(pocketpy PRIVATE PK_ENABLE_OS=1)
+target_compile_definitions(pocketpy PRIVATE PK_ENABLE_OS=1 PK_ENABLE_WATCHDOG=1)
 
 # stb implementations (compiled once)
 add_library(stb STATIC third_party/stb/stb_impl.cpp)
@@ -33,6 +33,7 @@ set(LVV_SOURCES
     src/server/api_routes.cpp
     src/server/ws_handler.cpp
     src/app/app.cpp
+    src/app/config.cpp
 )
 
 add_executable(lvv ${LVV_SOURCES})
@@ -44,6 +45,7 @@ target_include_directories(lvv PRIVATE
     third_party/stb
     third_party/crow
     third_party/pocketpy
+    third_party
 )
 
 target_link_libraries(lvv PRIVATE
@@ -61,5 +63,47 @@ target_compile_definitions(lvv PRIVATE
     PK_IS_PUBLIC_INCLUDE
     CROW_STATIC_DIRECTORY="web/dist/"
     CROW_STATIC_ENDPOINT="/static/<path>"
-    LVV_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+
+# --- Install ---
+install(TARGETS lvv RUNTIME DESTINATION bin)
+install(DIRECTORY web/dist/ DESTINATION share/lvv/web
+        OPTIONAL)
+
+# --- Tests ---
+option(LVV_BUILD_TESTS "Build unit tests" ON)
+
+if(LVV_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG v2.4.11
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(doctest)
+
+    add_executable(lvv_tests
+        tests/test_widget_tree.cpp
+        tests/test_visual_regression.cpp
+        tests/test_screen_capture.cpp
+        tests/test_protocol_parse.cpp
+        src/core/widget_tree.cpp
+        src/core/visual_regression.cpp
+        src/core/screen_capture.cpp
+    )
+
+    target_include_directories(lvv_tests PRIVATE
+        src
+        third_party/nlohmann
+        third_party/stb
+    )
+
+    target_link_libraries(lvv_tests PRIVATE
+        stb
+        doctest::doctest
+    )
+
+    include(CTest)
+    add_test(NAME lvv_tests COMMAND lvv_tests)
+endif()

@@ -36,8 +36,14 @@ public:
     /// Set execution timeout in seconds (0 = no timeout)
     void set_timeout(double seconds) { timeout_seconds_ = seconds; }
 
-    /// Cancellation flag — checked by lvv_module functions to bail out early
-    static std::atomic<bool>& cancelled();
+    /// Cancellation flag — checked by lvv_module functions to bail out early.
+    /// Per-instance, but the active engine is set via set_active() so
+    /// lvv_module can find the right flag.
+    std::atomic<bool>& cancelled() { return cancelled_; }
+
+    /// Set this engine as the active one (for lvv_module to query cancellation)
+    static void set_active(ScriptEngine* engine);
+    static ScriptEngine* active();
 
 private:
     void thread_main();
@@ -55,6 +61,7 @@ private:
     bool busy_ = false;  // true while script thread is executing
     bool shutdown_ = false;
     double timeout_seconds_ = 30.0;
+    std::atomic<bool> cancelled_{false};
 };
 
 } // namespace lvv

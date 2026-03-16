@@ -8,14 +8,24 @@ Protocol::Protocol(ITransport* transport)
     : transport_(transport) {}
 
 bool Protocol::connect() {
+    std::lock_guard lock(mutex_);
     return transport_->connect();
 }
 
 void Protocol::disconnect() {
+    // Two-phase disconnect:
+    // 1) abort() without the lock — calls shutdown(fd) which unblocks any
+    //    thread stuck in recv()/poll() inside send_command()/screenshot(),
+    //    causing it to error out and release the mutex.
+    // 2) Acquire the lock, then close(fd) + clear buffers. The lock
+    //    guarantees no command is mid-flight when state is mutated.
+    transport_->abort();
+    std::lock_guard lock(mutex_);
     transport_->disconnect();
 }
 
 bool Protocol::is_connected() const {
+    std::lock_guard lock(mutex_);
     return transport_->is_connected();
 }
 
@@ -66,81 +76,50 @@ std::optional<WidgetInfo> Protocol::find(const std::string& selector) {
     return std::nullopt;
 }
 
-bool Protocol::click(const std::string& selector) {
+bool Protocol::fire_and_forget(const nlohmann::json& cmd) {
     try {
-        send_command({{"cmd", "click"}, {"name", selector}});
+        send_command(cmd);
         return true;
     } catch (...) {
         return false;
     }
+}
+
+bool Protocol::click(const std::string& selector) {
+    return fire_and_forget({{"cmd", "click"}, {"name", selector}});
 }
 
 bool Protocol::click_at(int x, int y) {
-    try {
-        send_command({{"cmd", "click_at"}, {"x", x}, {"y", y}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "click_at"}, {"x", x}, {"y", y}});
 }
 
 bool Protocol::press(int x, int y) {
-    try {
-        send_command({{"cmd", "press"}, {"x", x}, {"y", y}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "press"}, {"x", x}, {"y", y}});
 }
 
 bool Protocol::release() {
-    try {
-        send_command({{"cmd", "release"}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "release"}});
 }
 
 bool Protocol::move_to(int x, int y) {
-    try {
-        send_command({{"cmd", "move_to"}, {"x", x}, {"y", y}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "move_to"}, {"x", x}, {"y", y}});
 }
 
 bool Protocol::swipe(int x1, int y1, int x2, int y2, int duration_ms) {
-    try {
-        send_command({
-            {"cmd", "swipe"},
-            {"x", x1}, {"y", y1},
-            {"x_end", x2}, {"y_end", y2},
-            {"duration", duration_ms}
-        });
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({
+        {"cmd", "swipe"},
+        {"x", x1}, {"y", y1},
+        {"x_end", x2}, {"y_end", y2},
+        {"duration", duration_ms}
+    });
 }
 
 bool Protocol::type_text(const std::string& text) {
-    try {
-        send_command({{"cmd", "type"}, {"text", text}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "type"}, {"text", text}});
 }
 
 bool Protocol::key(const std::string& key_code) {
-    try {
-        send_command({{"cmd", "key"}, {"key", key_code}});
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return fire_and_forget({{"cmd", "key"}, {"key", key_code}});
 }
 
 Image Protocol::screenshot() {

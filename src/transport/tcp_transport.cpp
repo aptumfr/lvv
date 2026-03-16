@@ -47,6 +47,14 @@ bool TCPTransport::connect() {
     return false;
 }
 
+void TCPTransport::abort() {
+    // shutdown() unblocks any thread blocked in poll()/recv() on this fd.
+    // Does not close the fd or mutate any other state — safe to call concurrently.
+    if (fd_ >= 0) {
+        ::shutdown(fd_, SHUT_RDWR);
+    }
+}
+
 void TCPTransport::disconnect() {
     if (fd_ >= 0) {
         ::close(fd_);

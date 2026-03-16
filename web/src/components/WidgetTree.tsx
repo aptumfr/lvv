@@ -5,15 +5,12 @@ import type { WidgetInfo } from '../types';
 
 function TreeNode({ widget, depth = 0 }: { widget: WidgetInfo; depth?: number }) {
   const [expanded, setExpanded] = useState(depth < 2);
-  const { setSelectedWidget, selectedWidget, recording, addRecordedStep } = useAppStore();
+  const { setSelectedWidget, selectedWidget } = useAppStore();
   const hasChildren = widget.children && widget.children.length > 0;
   const isSelected = selectedWidget?.auto_path === widget.auto_path && widget.auto_path !== '';
 
   const handleClick = () => {
     setSelectedWidget(widget);
-    if (recording && widget.name) {
-      addRecordedStep(`lvv.click("${widget.name}")`);
-    }
   };
 
   return (

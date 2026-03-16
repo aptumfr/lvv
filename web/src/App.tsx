@@ -5,40 +5,59 @@ import { WidgetTreePanel } from './components/WidgetTree';
 import { PropertyPanel } from './components/PropertyPanel';
 import { TestEditor } from './components/TestEditor';
 import { VisualDiffViewer } from './components/VisualDiffViewer';
+import { SplitPane } from './components/SplitPane';
+import { useHealthPoller } from './api/useHealthPoller';
 
 type BottomTab = 'script' | 'visual';
 
 function App() {
+  useHealthPoller();
   const [bottomTab, setBottomTab] = useState<BottomTab>('script');
 
   return (
-    <div className="flex h-screen bg-slate-800 text-slate-200">
+    <SplitPane
+      direction="horizontal"
+      defaultSize={288}
+      minSize={200}
+      maxSize={500}
+      className="h-screen bg-slate-800 text-slate-200"
+    >
       {/* Left sidebar */}
-      <div className="w-72 flex flex-col border-r border-slate-700 bg-slate-800">
+      <div className="h-full flex flex-col bg-slate-800">
         <div className="p-3 border-b border-slate-700">
           <h1 className="text-lg font-bold text-white">LVV</h1>
           <p className="text-xs text-slate-400">LVGL Test Automation</p>
         </div>
         <ConnectionPanel />
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-hidden">
+        <SplitPane
+          direction="vertical"
+          defaultSize={400}
+          minSize={100}
+          className="flex-1"
+        >
+          <div className="h-full overflow-hidden">
             <WidgetTreePanel />
           </div>
-          <div className="h-48 border-t border-slate-700 overflow-auto">
+          <div className="h-full overflow-auto">
             <PropertyPanel />
           </div>
-        </div>
+        </SplitPane>
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col">
+      <SplitPane
+        direction="vertical"
+        defaultSize={400}
+        minSize={150}
+        className="h-full"
+      >
         {/* Top: Live view */}
-        <div className="flex-1 min-h-0">
+        <div className="h-full min-h-0">
           <LiveView />
         </div>
 
         {/* Bottom panel with tabs */}
-        <div className="h-80 border-t border-slate-700 flex flex-col">
+        <div className="h-full flex flex-col">
           <div className="flex border-b border-slate-700">
             <button
               onClick={() => setBottomTab('script')}
@@ -66,8 +85,8 @@ function App() {
             {bottomTab === 'visual' && <VisualDiffViewer />}
           </div>
         </div>
-      </div>
-    </div>
+      </SplitPane>
+    </SplitPane>
   );
 }
 

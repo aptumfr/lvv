@@ -13,6 +13,7 @@ public:
     bool connect() override;
     void disconnect() override;
     bool is_connected() const override;
+    void abort() override;
     bool send(std::string_view data) override;
     std::optional<std::string> receive(std::chrono::milliseconds timeout) override;
     std::optional<std::vector<uint8_t>> receive_bytes(

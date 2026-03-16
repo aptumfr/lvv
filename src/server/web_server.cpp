@@ -5,6 +5,8 @@
 #include "core/test_runner.hpp"
 #include "scripting/script_engine.hpp"
 
+#include "core/log.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -72,8 +74,8 @@ WebServer::WebServer(Protocol* protocol, WidgetTree* tree,
 
         // Prevent path traversal
         auto canonical = std::filesystem::weakly_canonical(file_path).string();
-        auto base = std::filesystem::weakly_canonical(static_dir_).string();
-        if (canonical.find(base) != 0) {
+        auto base = std::filesystem::weakly_canonical(static_dir_).string() + "/";
+        if (canonical.rfind(base, 0) != 0) {
             return crow::response(403, "Forbidden");
         }
 
@@ -100,8 +102,8 @@ WebServer::WebServer(Protocol* protocol, WidgetTree* tree,
 
         // Prevent path traversal
         auto canonical = std::filesystem::weakly_canonical(file_path).string();
-        auto base = std::filesystem::weakly_canonical(static_dir_).string();
-        if (canonical.find(base) != 0) {
+        auto base = std::filesystem::weakly_canonical(static_dir_).string() + "/";
+        if (canonical.rfind(base, 0) != 0) {
             return crow::response(403, "Forbidden");
         }
 
@@ -134,14 +136,14 @@ void WebServer::start(int port, bool async) {
     if (async) {
         server_thread_ = std::thread([this, port]() {
             app_.port(port)
-                .multithreaded()
+                .concurrency(2)
                 .run();
         });
-        std::cout << "Web server started on http://localhost:" << port << "\n";
+        LOG_INFO(log::get(), "Web server started on http://localhost:{}", port);
     } else {
-        std::cout << "Web server starting on http://localhost:" << port << "\n";
+        LOG_INFO(log::get(), "Web server starting on http://localhost:{}", port);
         app_.port(port)
-            .multithreaded()
+            .concurrency(2)
             .run();
     }
 }
@@ -149,6 +151,9 @@ void WebServer::start(int port, bool async) {
 void WebServer::stop() {
     if (!running_) return;
     running_ = false;
+    // Stop streaming first — the stream thread may be holding the protocol
+    // mutex or blocked on a screenshot, which would prevent Crow from shutting down.
+    ws_handler_.stop_streaming();
     app_.stop();
     if (server_thread_.joinable()) {
         server_thread_.join();

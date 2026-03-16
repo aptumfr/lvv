@@ -1,9 +1,9 @@
 #include "test_runner.hpp"
+#include "log.hpp"
 #include "scripting/script_engine.hpp"
 
 #include <chrono>
 #include <filesystem>
-#include <iostream>
 
 namespace lvv {
 
@@ -32,11 +32,13 @@ TestResult TestRunner::run_file(const std::string& path) {
     }
 
     if (verbose_) {
-        const char* status_str = (result.status == TestStatus::Pass) ? "PASS" : "FAIL";
-        std::cout << "  [" << status_str << "] " << result.name
-                  << " (" << result.duration_seconds << "s)\n";
-        if (result.status != TestStatus::Pass && !result.message.empty()) {
-            std::cout << "    " << result.message << "\n";
+        if (result.status == TestStatus::Pass) {
+            LOG_INFO(log::get(), "  [PASS] {} ({:.2f}s)", result.name, result.duration_seconds);
+        } else {
+            LOG_ERROR(log::get(), "  [FAIL] {} ({:.2f}s)", result.name, result.duration_seconds);
+            if (!result.message.empty()) {
+                LOG_ERROR(log::get(), "    {}", result.message);
+            }
         }
     }
 

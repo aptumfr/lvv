@@ -38,6 +38,7 @@ public:
 
 private:
     nlohmann::json send_command(const nlohmann::json& cmd);
+    bool fire_and_forget(const nlohmann::json& cmd);
     static WidgetInfo parse_widget(const nlohmann::json& j);
 
     ITransport* transport_;

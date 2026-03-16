@@ -1,24 +1,23 @@
 #include "app.hpp"
 #include "transport/tcp_transport.hpp"
 #include "transport/serial_transport.hpp"
+#include "protocol/protocol.hpp"
+#include "core/widget_tree.hpp"
 #include "core/screen_capture.hpp"
+#include "core/test_runner.hpp"
 #include "core/junit_xml.hpp"
+#include "scripting/script_engine.hpp"
 #include "scripting/lvv_module.hpp"
+#include "server/web_server.hpp"
+#include "core/log.hpp"
 
 #include <json.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include <csignal>
 
 namespace lvv {
-
-static std::atomic<bool> s_running{true};
-
-static void signal_handler(int) {
-    s_running = false;
-}
 
 App::App() = default;
 App::~App() = default;
@@ -27,19 +26,18 @@ bool App::connect(const AppConfig& config) {
     if (!config.serial_device.empty()) {
         transport_ = std::make_unique<SerialTransport>(
             config.serial_device, config.serial_baud);
-        std::cout << "Connecting via serial: " << config.serial_device
-                  << " @ " << config.serial_baud << " baud\n";
+        LOG_INFO(log::get(), "Connecting via serial: {} @ {} baud",
+                 config.serial_device, config.serial_baud);
     } else {
         transport_ = std::make_unique<TCPTransport>(
             config.target_host, config.target_port);
-        std::cout << "Connecting to " << config.target_host
-                  << ":" << config.target_port << "\n";
+        LOG_INFO(log::get(), "Connecting to {}:{}", config.target_host, config.target_port);
     }
 
     protocol_ = std::make_unique<Protocol>(transport_.get());
 
     if (!protocol_->connect()) {
-        std::cerr << "Failed to connect\n";
+        LOG_ERROR(log::get(), "Failed to connect");
         return false;
     }
     return true;
@@ -50,10 +48,10 @@ int App::ping(const AppConfig& config) {
 
     try {
         auto version = protocol_->ping();
-        std::cout << "Connected. Spy version: " << version << "\n";
+        LOG_INFO(log::get(), "Connected. Spy version: {}", version);
         return 0;
     } catch (const std::exception& e) {
-        std::cerr << "Ping failed: " << e.what() << "\n";
+        LOG_ERROR(log::get(), "Ping failed: {}", e.what());
         return 1;
     }
 }
@@ -66,10 +64,10 @@ int App::tree(const AppConfig& config, bool auto_paths) {
         widget_tree_ = std::make_unique<WidgetTree>();
         widget_tree_->update(tree_json);
 
-        std::cout << widget_tree_->to_json().dump(2) << "\n";
+        std::cout << widget_tree_->to_json().dump(2) << "\n";  // stdout for piping
         return 0;
     } catch (const std::exception& e) {
-        std::cerr << "Failed to get tree: " << e.what() << "\n";
+        LOG_ERROR(log::get(), "Failed to get tree: {}", e.what());
         return 1;
     }
 }
@@ -86,14 +84,14 @@ int App::screenshot(const AppConfig& config, const std::string& output) {
 
         std::string out_path = output.empty() ? "screenshot.png" : output;
         if (save_png(img, out_path)) {
-            std::cout << "Screenshot saved to " << out_path << "\n";
+            LOG_INFO(log::get(), "Screenshot saved to {}", out_path);
             return 0;
         } else {
-            std::cerr << "Failed to save screenshot\n";
+            LOG_ERROR(log::get(), "Failed to save screenshot");
             return 1;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Screenshot failed: " << e.what() << "\n";
+        LOG_ERROR(log::get(), "Screenshot failed: {}", e.what());
         return 1;
     }
 }
@@ -128,20 +126,18 @@ int App::run_tests(const AppConfig& config) {
     std::sort(files.begin(), files.end());
 
     if (files.empty()) {
-        std::cerr << "No test files found\n";
+        LOG_ERROR(log::get(), "No test files found");
         return 1;
     }
 
-    std::cout << "Running " << files.size() << " test(s)...\n";
+    LOG_INFO(log::get(), "Running {} test(s)...", files.size());
 
     auto suite = test_runner_->run_suite("lvv_tests", files);
 
     // Print summary
-    std::cout << "\n"
-              << suite.passed() << " passed, "
-              << suite.failed() << " failed, "
-              << suite.tests.size() << " total ("
-              << suite.total_duration_seconds << "s)\n";
+    LOG_INFO(log::get(), "{} passed, {} failed, {} total ({:.2f}s)",
+             suite.passed(), suite.failed(), suite.tests.size(),
+             suite.total_duration_seconds);
 
     // Write JUnit XML
     if (!config.junit_output.empty()) {
@@ -149,7 +145,7 @@ int App::run_tests(const AppConfig& config) {
         std::ofstream f(config.junit_output);
         if (f.is_open()) {
             f << xml;
-            std::cout << "JUnit report: " << config.junit_output << "\n";
+            LOG_INFO(log::get(), "JUnit report: {}", config.junit_output);
         }
     }
 
@@ -158,14 +154,17 @@ int App::run_tests(const AppConfig& config) {
 
 int App::serve(const AppConfig& config) {
     if (!connect(config)) {
-        std::cerr << "Warning: Could not connect to target. "
-                  << "Server starting anyway.\n";
+        LOG_WARNING(log::get(), "Could not connect to target. Server starting anyway.");
     }
 
     script_engine_ = std::make_unique<ScriptEngine>();
+    script_engine_->set_timeout(config.timeout);
     if (protocol_) {
         script_engine_->set_protocol(protocol_.get());
     }
+
+    // Forward visual-test defaults so API-triggered scripts use the same settings as CLI
+    lvv_module_set_defaults(config.ref_images_dir, config.diff_threshold);
 
     widget_tree_ = std::make_unique<WidgetTree>();
     test_runner_ = std::make_unique<TestRunner>(*script_engine_);
@@ -175,17 +174,11 @@ int App::serve(const AppConfig& config) {
         script_engine_.get(), test_runner_.get(),
         config.static_dir);
 
-    // Handle Ctrl-C
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
-
-    std::cout << "LVV Server v0.1.0\n";
+    LOG_INFO(log::get(), "LVV Server v0.1.0");
     if (!config.serial_device.empty()) {
-        std::cout << "Target: " << config.serial_device
-                  << " @ " << config.serial_baud << " baud\n";
+        LOG_INFO(log::get(), "Target: {} @ {} baud", config.serial_device, config.serial_baud);
     } else {
-        std::cout << "Target: " << config.target_host
-                  << ":" << config.target_port << "\n";
+        LOG_INFO(log::get(), "Target: {}:{}", config.target_host, config.target_port);
     }
 
     web_server_->start(config.web_port, false);

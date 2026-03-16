@@ -14,13 +14,16 @@
 
 namespace lvv {
 
-// Global protocol pointer — safe because PocketPy is single-threaded
+// --- Module-level state ---
+// These globals are only accessed from the PocketPy thread (via py_bind callbacks)
+// or set before scripts run (set_protocol, set_defaults). Safe because:
+//  1. PocketPy VM is single-threaded — all py_bind callbacks run on the ScriptEngine thread
+//  2. set_protocol/set_defaults are called during init, before any scripts execute
+//  3. There is exactly one ScriptEngine instance (enforced by App owning it)
+// If multiple ScriptEngine instances are ever needed, move these into a struct
+// hung off the PocketPy VM's user data pointer.
 static Protocol* g_protocol = nullptr;
-
-// Object map: logical name -> widget selector
 static nlohmann::json g_object_map;
-
-// Default settings from CLI
 static std::string g_ref_images_dir = "ref_images";
 static double g_default_threshold = 0.1;
 
@@ -46,9 +49,14 @@ static std::string resolve_name(const char* name) {
     return name;
 }
 
+static bool is_cancelled() {
+    auto* engine = ScriptEngine::active();
+    return engine && engine->cancelled().load();
+}
+
 // Helper: check cancellation and protocol connection
 static bool check_protocol() {
-    if (ScriptEngine::cancelled().load()) {
+    if (is_cancelled()) {
         py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         return false;
     }
@@ -264,7 +272,7 @@ static bool py_lvv_wait(int argc, py_StackRef argv) {
     // Sleep in small increments so cancellation is responsive
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < deadline) {
-        if (ScriptEngine::cancelled().load()) {
+        if (is_cancelled()) {
             return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         }
         auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -520,7 +528,7 @@ static bool py_lvv_wait_for(int argc, py_StackRef argv) {
     constexpr int poll_interval_ms = 100;
 
     while (true) {
-        if (ScriptEngine::cancelled().load()) {
+        if (is_cancelled()) {
             return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         }
 
@@ -555,7 +563,7 @@ static bool py_lvv_wait_until(int argc, py_StackRef argv) {
     std::string last_value;
 
     while (true) {
-        if (ScriptEngine::cancelled().load()) {
+        if (is_cancelled()) {
             return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         }
 
