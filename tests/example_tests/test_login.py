@@ -1,30 +1,32 @@
 import lvv
 
-# Test: Login flow
-# Assumes an LVGL UI with a login screen
+# Test: Counter app basic interaction
+# Target: counter_with_spy (not demo_with_spy)
 
-# Verify the login screen is visible
-lvv.assert_visible("login_screen")
+# Skip if counter app is not running
+if lvv.find("counter_root") is None:
+    print("SKIP: counter_with_spy not running")
+else:
+    lvv.assert_visible("counter_root")
+    lvv.assert_visible("count_label")
 
-# Type username
-lvv.click("input_username")
-lvv.type_text("admin")
+    # Click plus three times
+    lvv.click("btn_plus")
+    lvv.wait(100)
+    lvv.click("btn_plus")
+    lvv.wait(100)
+    lvv.click("btn_plus")
+    lvv.wait(100)
 
-# Type password
-lvv.click("input_password")
-lvv.type_text("secret123")
+    # Click minus once
+    lvv.click("btn_minus")
+    lvv.wait(100)
 
-# Click login button
-lvv.click("button[Login]")
+    # Reset
+    lvv.click("btn_reset")
+    lvv.wait(100)
 
-# Wait for transition
-lvv.wait(500)
+    # Visual regression
+    lvv.screenshot_compare("counter_reset.png", 0.1)
 
-# Verify we reached the dashboard
-lvv.assert_visible("dashboard_screen")
-lvv.assert_hidden("login_screen")
-
-# Take a screenshot for visual regression
-lvv.screenshot_compare("ref_images/dashboard.png", 0.1)
-
-print("Login test passed!")
+    print("Counter test passed!")

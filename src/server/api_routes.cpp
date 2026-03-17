@@ -328,6 +328,81 @@ void register_api_routes(CrowApp& app,
         });
     });
 
+    // Long press
+    CROW_ROUTE(app, "/api/long-press").methods("POST"_method)
+    ([protocol](const crow::request& req) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("x") || !body->contains("y"))
+            return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
+
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->long_press(
+                (*body)["x"].get<int>(), (*body)["y"].get<int>(),
+                body->value("duration", 500))}};
+        });
+    });
+
+    // Drag
+    CROW_ROUTE(app, "/api/drag").methods("POST"_method)
+    ([protocol](const crow::request& req) {
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, "Invalid JSON");
+
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->drag(
+                body->value("x", 0), body->value("y", 0),
+                body->value("x_end", 0), body->value("y_end", 0),
+                body->value("duration", 300),
+                body->value("steps", 10))}};
+        });
+    });
+
+    // Find by multi-property selector
+    CROW_ROUTE(app, "/api/find-by").methods("POST"_method)
+    ([protocol, tree](const crow::request& req) {
+        auto body = parse_body(req);
+        if (!body || !body->contains("selector"))
+            return crow::response(400, R"({"error":"Need 'selector'"})");
+
+        auto sel = parse_selector((*body)["selector"].get<std::string>());
+        auto sel_err = validate_selector(sel);
+        if (!sel_err.empty()) {
+            nlohmann::json err = {{"error", "Invalid selector: " + sel_err}};
+            return crow::response(400, err.dump());
+        }
+
+        return json_route([&, sel]() -> nlohmann::json {
+            auto tree_json = protocol->get_tree();
+            std::lock_guard lock(tree->mutex);
+            tree->update(tree_json);
+            bool find_all = body->value("all", false);
+
+            if (find_all) {
+                auto widgets = tree->find_all_by_selector(sel);
+                nlohmann::json arr = nlohmann::json::array();
+                for (const auto& w : widgets) {
+                    arr.push_back({
+                        {"name", w.name}, {"type", w.type},
+                        {"auto_path", w.auto_path}, {"text", w.text},
+                        {"x", w.x}, {"y", w.y},
+                        {"width", w.width}, {"height", w.height},
+                        {"visible", w.visible}, {"clickable", w.clickable}
+                    });
+                }
+                return {{"found", !arr.empty()}, {"count", arr.size()}, {"widgets", arr}};
+            } else {
+                auto widget = tree->find_by_selector(sel);
+                if (!widget) return nlohmann::json{{"found", false}};
+                return {{"found", true},
+                        {"name", widget->name}, {"type", widget->type},
+                        {"auto_path", widget->auto_path}, {"text", widget->text},
+                        {"x", widget->x}, {"y", widget->y},
+                        {"width", widget->width}, {"height", widget->height},
+                        {"visible", widget->visible}, {"clickable", widget->clickable}};
+            }
+        });
+    });
+
     // Ping target
     CROW_ROUTE(app, "/api/ping")
     ([protocol]() {

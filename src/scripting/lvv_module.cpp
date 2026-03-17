@@ -496,6 +496,197 @@ static bool py_lvv_get_all_widgets(int argc, py_StackRef argv) {
     }
 }
 
+// --- Multi-property selectors ---
+
+static bool py_lvv_find_by(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* expr = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    try {
+        auto sel = parse_selector(expr);
+        auto err = validate_selector(sel);
+        if (!err.empty())
+            return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
+
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+
+        auto widget = tree.find_by_selector(sel);
+        if (!widget) {
+            py_newnone(py_retval());
+        } else {
+            nlohmann::json j;
+            j["name"] = widget->name;
+            j["type"] = widget->type;
+            j["x"] = widget->x;
+            j["y"] = widget->y;
+            j["width"] = widget->width;
+            j["height"] = widget->height;
+            j["visible"] = widget->visible;
+            j["auto_path"] = widget->auto_path;
+            j["text"] = widget->text;
+            py_newstr(py_retval(), j.dump().c_str());
+        }
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_find_all_by(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* expr = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    try {
+        auto sel = parse_selector(expr);
+        auto err = validate_selector(sel);
+        if (!err.empty())
+            return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
+
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+
+        auto widgets = tree.find_all_by_selector(sel);
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& w : widgets) {
+            nlohmann::json j;
+            j["name"] = w.name;
+            j["type"] = w.type;
+            j["x"] = w.x;
+            j["y"] = w.y;
+            j["width"] = w.width;
+            j["height"] = w.height;
+            j["visible"] = w.visible;
+            j["auto_path"] = w.auto_path;
+            j["text"] = w.text;
+            arr.push_back(j);
+        }
+        py_newstr(py_retval(), arr.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// --- Compound gestures ---
+
+static bool py_lvv_long_press(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(3);
+    int x = py_toint(py_arg(0));
+    int y = py_toint(py_arg(1));
+    int duration = py_toint(py_arg(2));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->long_press(x, y, duration, is_cancelled);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_drag(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(5);
+    int x1 = py_toint(py_arg(0));
+    int y1 = py_toint(py_arg(1));
+    int x2 = py_toint(py_arg(2));
+    int y2 = py_toint(py_arg(3));
+    int duration = py_toint(py_arg(4));
+    if (!check_protocol()) return false;
+
+    try {
+        bool ok = g_protocol->drag(x1, y1, x2, y2, duration, 10, is_cancelled);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// --- Retry-aware find ---
+
+static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    const char* name_or_selector = py_tostr(py_arg(0));
+    int timeout_ms = py_toint(py_arg(1));
+    if (!check_protocol()) return false;
+
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(timeout_ms);
+    constexpr int poll_interval_ms = 100;
+
+    // Detect if this is a multi-property selector (contains '=')
+    std::string expr(name_or_selector);
+    bool is_selector = expr.find('=') != std::string::npos;
+
+    // Validate selector once upfront
+    WidgetSelector sel;
+    if (is_selector) {
+        sel = parse_selector(expr);
+        auto err = validate_selector(sel);
+        if (!err.empty())
+            return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
+    }
+
+    while (true) {
+        if (is_cancelled()) {
+            return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
+        }
+
+        try {
+            if (is_selector) {
+                auto tree_json = g_protocol->get_tree();
+                WidgetTree tree;
+                tree.update(tree_json);
+                auto widget = tree.find_by_selector(sel);
+                if (widget) {
+                    nlohmann::json j;
+                    j["name"] = widget->name;
+                    j["type"] = widget->type;
+                    j["x"] = widget->x;
+                    j["y"] = widget->y;
+                    j["width"] = widget->width;
+                    j["height"] = widget->height;
+                    j["visible"] = widget->visible;
+                    j["auto_path"] = widget->auto_path;
+                    j["text"] = widget->text;
+                    py_newstr(py_retval(), j.dump().c_str());
+                    return true;
+                }
+            } else {
+                auto name = resolve_name(name_or_selector);
+                auto widget = g_protocol->find(name);
+                if (widget) {
+                    nlohmann::json j;
+                    j["name"] = widget->name;
+                    j["type"] = widget->type;
+                    j["x"] = widget->x;
+                    j["y"] = widget->y;
+                    j["width"] = widget->width;
+                    j["height"] = widget->height;
+                    j["visible"] = widget->visible;
+                    j["auto_path"] = widget->auto_path;
+                    j["text"] = widget->text;
+                    py_newstr(py_retval(), j.dump().c_str());
+                    return true;
+                }
+            }
+        } catch (...) {}
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return py_exception(tp_TimeoutError,
+                "Timed out waiting for '%s' (%dms)",
+                name_or_selector, timeout_ms);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+    }
+}
+
 // --- Object Map ---
 
 static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
@@ -517,11 +708,40 @@ static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
 
 // --- wait_for / wait_until ---
 
+// Helper: find a visible widget by pre-parsed selector
+static std::optional<WidgetInfo> find_visible_by_selector(const WidgetSelector& sel) {
+    auto tree_json = g_protocol->get_tree();
+    WidgetTree tree;
+    tree.update(tree_json);
+    auto widget = tree.find_by_selector(sel);
+    if (widget && widget->visible) return widget;
+    return std::nullopt;
+}
+
+// Helper: find a visible widget by name
+static std::optional<WidgetInfo> find_visible_by_name(const std::string& name) {
+    auto widget = g_protocol->find(name);
+    if (widget && widget->visible) return widget;
+    return std::nullopt;
+}
+
 static bool py_lvv_wait_for(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(2);
-    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* name_or_selector = py_tostr(py_arg(0));
     int timeout_ms = py_toint(py_arg(1));
     if (!check_protocol()) return false;
+
+    std::string expr(name_or_selector);
+    bool is_selector = expr.find('=') != std::string::npos;
+
+    // Validate selector once upfront
+    WidgetSelector sel;
+    if (is_selector) {
+        sel = parse_selector(expr);
+        auto err = validate_selector(sel);
+        if (!err.empty())
+            return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
+    }
 
     auto deadline = std::chrono::steady_clock::now()
                   + std::chrono::milliseconds(timeout_ms);
@@ -533,8 +753,10 @@ static bool py_lvv_wait_for(int argc, py_StackRef argv) {
         }
 
         try {
-            auto widget = g_protocol->find(name);
-            if (widget && widget->visible) {
+            auto found = is_selector
+                ? find_visible_by_selector(sel)
+                : find_visible_by_name(resolve_name(name_or_selector));
+            if (found) {
                 py_newbool(py_retval(), true);
                 return true;
             }
@@ -543,7 +765,7 @@ static bool py_lvv_wait_for(int argc, py_StackRef argv) {
         if (std::chrono::steady_clock::now() >= deadline) {
             return py_exception(tp_TimeoutError,
                 "Timed out waiting for widget '%s' (%dms)",
-                name.c_str(), timeout_ms);
+                name_or_selector, timeout_ms);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
     }
@@ -632,6 +854,17 @@ void lvv_module_register() {
     py_bind(mod, "load_object_map(path)", py_lvv_load_object_map);
     py_bind(mod, "wait_for(name, timeout)", py_lvv_wait_for);
     py_bind(mod, "wait_until(name, prop, value, timeout)", py_lvv_wait_until);
+
+    // Multi-property selectors
+    py_bind(mod, "find_by(selector)", py_lvv_find_by);
+    py_bind(mod, "find_all_by(selector)", py_lvv_find_all_by);
+
+    // Compound gestures
+    py_bind(mod, "long_press(x, y, duration)", py_lvv_long_press);
+    py_bind(mod, "drag(x1, y1, x2, y2, duration)", py_lvv_drag);
+
+    // Retry-aware find
+    py_bind(mod, "find_with_retry(selector, timeout)", py_lvv_find_with_retry);
 }
 
 } // namespace lvv

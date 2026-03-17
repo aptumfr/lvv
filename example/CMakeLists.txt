@@ -33,6 +33,10 @@ target_link_libraries(lvv_spy PUBLIC lvgl)
 add_executable(counter_with_spy counter_with_spy.cpp)
 target_link_libraries(counter_with_spy PRIVATE lv_cpp lvv_spy)
 
+# Demo with spy (rich UI for test automation)
+add_executable(demo_with_spy demo_with_spy.cpp)
+target_link_libraries(demo_with_spy PRIVATE lv_cpp lvv_spy)
+
 # Find X11
 find_package(X11 QUIET)
 if(X11_FOUND)

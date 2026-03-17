@@ -1,6 +1,88 @@
 #include "widget_tree.hpp"
 
+#include <set>
+#include <sstream>
+
 namespace lvv {
+
+static const std::set<std::string> valid_selector_keys = {
+    "type", "name", "text", "visible", "clickable", "auto_path"
+};
+
+static const std::set<std::string> valid_bool_values = {
+    "true", "false", "1", "0"
+};
+
+static std::string trim(const std::string& s) {
+    size_t start = s.find_first_not_of(' ');
+    if (start == std::string::npos) return {};
+    size_t end = s.find_last_not_of(' ');
+    return s.substr(start, end - start + 1);
+}
+
+// Find positions where a ",key=" boundary starts (comma followed by a known key and '=').
+// This allows values to contain commas and '=' characters.
+static std::vector<size_t> find_pair_boundaries(const std::string& expr) {
+    std::vector<size_t> boundaries;
+    boundaries.push_back(0);
+    for (size_t i = 0; i < expr.size(); ++i) {
+        if (expr[i] != ',') continue;
+        // Check if what follows the comma is "key=" for a known key
+        auto rest = expr.substr(i + 1);
+        // Trim leading spaces
+        size_t skip = rest.find_first_not_of(' ');
+        if (skip == std::string::npos) continue;
+        rest = rest.substr(skip);
+        for (const auto& key : valid_selector_keys) {
+            if (rest.size() > key.size() && rest.compare(0, key.size(), key) == 0) {
+                // Check that the key is followed by optional spaces then '='
+                size_t k = key.size();
+                while (k < rest.size() && rest[k] == ' ') ++k;
+                if (k < rest.size() && rest[k] == '=') {
+                    boundaries.push_back(i + 1);  // Start of next pair (after comma)
+                    break;
+                }
+            }
+        }
+    }
+    return boundaries;
+}
+
+WidgetSelector parse_selector(const std::string& expr) {
+    WidgetSelector sel;
+    if (expr.empty()) return sel;
+
+    auto boundaries = find_pair_boundaries(expr);
+    for (size_t i = 0; i < boundaries.size(); ++i) {
+        size_t start = boundaries[i];
+        size_t end = (i + 1 < boundaries.size())
+            ? boundaries[i + 1] - 1  // -1 to exclude the comma
+            : expr.size();
+        auto token = expr.substr(start, end - start);
+        auto eq = token.find('=');
+        if (eq == std::string::npos) continue;
+        auto key = trim(token.substr(0, eq));
+        auto val = trim(token.substr(eq + 1));
+        if (!key.empty()) sel[key] = val;
+    }
+    return sel;
+}
+
+std::string validate_selector(const WidgetSelector& sel) {
+    if (sel.empty()) return "empty selector";
+    for (const auto& [key, val] : sel) {
+        if (valid_selector_keys.find(key) == valid_selector_keys.end()) {
+            return "unknown selector key: '" + key + "'";
+        }
+        if (key == "visible" || key == "clickable") {
+            if (valid_bool_values.find(val) == valid_bool_values.end()) {
+                return "invalid boolean value for '" + key + "': '" + val
+                     + "' (expected true, false, 1, or 0)";
+            }
+        }
+    }
+    return {};
+}
 
 static WidgetInfo parse_node(const nlohmann::json& j) {
     WidgetInfo w;
@@ -36,6 +118,16 @@ std::optional<WidgetInfo> WidgetTree::find_by_name(const std::string& name) cons
     return find_recursive(root_, name);
 }
 
+std::optional<WidgetInfo> WidgetTree::find_by_selector(const WidgetSelector& sel) const {
+    return find_selector_recursive(root_, sel);
+}
+
+std::vector<WidgetInfo> WidgetTree::find_all_by_selector(const WidgetSelector& sel) const {
+    std::vector<WidgetInfo> out;
+    find_all_selector_recursive(root_, sel, out);
+    return out;
+}
+
 std::optional<WidgetInfo> WidgetTree::find_at(int x, int y) const {
     return find_at_recursive(root_, x, y);
 }
@@ -60,6 +152,47 @@ std::optional<WidgetInfo> WidgetTree::find_recursive(
         if (result) return result;
     }
     return std::nullopt;
+}
+
+bool WidgetTree::matches_selector(const WidgetInfo& node, const WidgetSelector& sel) {
+    for (const auto& [key, val] : sel) {
+        if (key == "type") {
+            if (node.type != val) return false;
+        } else if (key == "name") {
+            if (node.name != val) return false;
+        } else if (key == "text") {
+            if (node.text != val) return false;
+        } else if (key == "visible") {
+            bool expected = (val == "true" || val == "1");
+            if (node.visible != expected) return false;
+        } else if (key == "clickable") {
+            bool expected = (val == "true" || val == "1");
+            if (node.clickable != expected) return false;
+        } else if (key == "auto_path") {
+            if (node.auto_path != val) return false;
+        } else {
+            return false;  // Unknown key never matches
+        }
+    }
+    return true;
+}
+
+std::optional<WidgetInfo> WidgetTree::find_selector_recursive(
+    const WidgetInfo& node, const WidgetSelector& sel) {
+    if (matches_selector(node, sel)) return node;
+    for (const auto& child : node.children) {
+        auto result = find_selector_recursive(child, sel);
+        if (result) return result;
+    }
+    return std::nullopt;
+}
+
+void WidgetTree::find_all_selector_recursive(
+    const WidgetInfo& node, const WidgetSelector& sel, std::vector<WidgetInfo>& out) {
+    if (matches_selector(node, sel)) out.push_back(node);
+    for (const auto& child : node.children) {
+        find_all_selector_recursive(child, sel, out);
+    }
 }
 
 std::optional<WidgetInfo> WidgetTree::find_at_recursive(

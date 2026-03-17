@@ -1,6 +1,8 @@
 #include "protocol.hpp"
 
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
 namespace lvv {
 
@@ -200,6 +202,52 @@ WidgetInfo Protocol::parse_widget(const nlohmann::json& j) {
         }
     }
     return w;
+}
+
+// Sleep in small chunks, checking cancel between each.
+// Returns true if cancelled.
+static bool cancellable_sleep(int ms, const Protocol::CancelFn& cancel) {
+    constexpr int chunk_ms = 50;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (cancel && cancel()) return true;
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        auto sleep_time = std::min(remaining, std::chrono::milliseconds(chunk_ms));
+        if (sleep_time.count() > 0)
+            std::this_thread::sleep_for(sleep_time);
+    }
+    return cancel && cancel();
+}
+
+bool Protocol::long_press(int x, int y, int duration_ms, CancelFn cancel) {
+    if (!press(x, y)) return false;
+    if (cancellable_sleep(duration_ms, cancel)) {
+        release();
+        return false;
+    }
+    return release();
+}
+
+bool Protocol::drag(int x1, int y1, int x2, int y2, int duration_ms, int steps,
+                    CancelFn cancel) {
+    if (steps < 1) steps = 1;
+    if (!press(x1, y1)) return false;
+
+    int step_delay = duration_ms / steps;
+    for (int i = 1; i <= steps; ++i) {
+        if (cancellable_sleep(step_delay, cancel)) {
+            release();
+            return false;
+        }
+        int cx = x1 + (x2 - x1) * i / steps;
+        int cy = y1 + (y2 - y1) * i / steps;
+        if (!move_to(cx, cy)) {
+            release();
+            return false;
+        }
+    }
+    return release();
 }
 
 } // namespace lvv

@@ -1,32 +1,33 @@
 import lvv
 
 # Test: Navigation between screens
+# Target: demo_with_spy
 
-# Start on dashboard
-lvv.assert_visible("dashboard_screen")
+# Start on home
+lvv.assert_visible("home_screen")
 
-# Navigate to settings via menu
-lvv.click("menu_btn")
-lvv.wait(200)
-lvv.click("button[Settings]")
-lvv.wait(300)
-
-# Verify settings screen
-lvv.assert_visible("settings_screen")
-
-# Change a slider value
-lvv.click("slider[Brightness]")
-
-# Swipe the slider to the right
-info = lvv.find("slider[Brightness]")
-# Swipe across the slider
-lvv.swipe(100, 200, 300, 200, 500)
+# Navigate to settings
+lvv.click("btn_settings")
+lvv.wait_for("settings_screen", 2000)
+lvv.assert_visible("settings_title")
 
 # Go back
-lvv.click("button[Back]")
-lvv.wait(300)
+lvv.click("btn_back_settings")
+lvv.wait_for("home_screen", 2000)
 
-# Verify we're back on dashboard
-lvv.assert_visible("dashboard_screen")
+# Navigate to list
+lvv.click("btn_items")
+lvv.wait_for("list_screen", 2000)
+lvv.assert_visible("list_title")
+
+# Go back
+lvv.click("btn_back_list")
+lvv.wait_for("home_screen", 2000)
+
+# Verify we're back on home
+lvv.assert_visible("home_title")
+
+# Take a screenshot of home for visual regression
+lvv.screenshot_compare("home_screen.png", 0.1)
 
 print("Navigation test passed!")
