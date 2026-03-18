@@ -182,6 +182,24 @@ ScreenInfo Protocol::get_screen_info() {
     };
 }
 
+nlohmann::json Protocol::get_logs() {
+    return send_command({{"cmd", "get_logs"}});
+}
+
+bool Protocol::clear_logs() {
+    auto resp = send_command({{"cmd", "clear_logs"}});
+    return resp.value("success", false);
+}
+
+bool Protocol::set_log_capture(bool enable) {
+    auto resp = send_command({{"cmd", "set_log_capture"}, {"enable", enable ? 1 : 0}});
+    return resp.value("success", false);
+}
+
+nlohmann::json Protocol::get_metrics() {
+    return send_command({{"cmd", "get_metrics"}});
+}
+
 WidgetInfo Protocol::parse_widget(const nlohmann::json& j) {
     WidgetInfo w;
     w.id = j.value("id", 0);

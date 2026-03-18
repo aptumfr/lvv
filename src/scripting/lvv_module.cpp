@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <thread>
 
 namespace lvv {
@@ -266,6 +267,117 @@ static bool py_lvv_screenshot_compare(int argc, py_StackRef argv) {
     }
 }
 
+// screenshot_compare with ignore regions: screenshot_compare_ex(ref_path, threshold, ignore_json)
+// ignore_json is a JSON array string: "[[x,y,w,h], [x,y,w,h], ...]"
+static bool py_lvv_screenshot_compare_ex(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(3);
+    const char* ref_path_arg = py_tostr(py_arg(0));
+    double threshold = py_tofloat(py_arg(1));
+    const char* ignore_json = py_tostr(py_arg(2));
+    if (!check_protocol()) return false;
+
+    if (threshold <= 0.0) threshold = g_default_threshold;
+
+    std::string ref_path = ref_path_arg;
+    if (!ref_path.empty() && ref_path[0] != '/') {
+        ref_path = g_ref_images_dir + "/" + ref_path;
+    }
+
+    try {
+        auto actual = g_protocol->screenshot();
+        if (!actual.valid()) {
+            return py_exception(tp_RuntimeError, "Failed to capture screenshot");
+        }
+
+        auto parent = std::filesystem::path(ref_path).parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
+
+        auto reference = load_png(ref_path);
+        if (!reference.valid()) {
+            save_png(actual, ref_path);
+            py_newbool(py_retval(), true);
+            return true;
+        }
+
+        CompareOptions opts;
+        opts.diff_threshold = threshold;
+
+        // Parse ignore regions from JSON string
+        auto regions = nlohmann::json::parse(ignore_json, nullptr, false);
+        if (regions.is_array()) {
+            for (const auto& r : regions) {
+                if (r.is_array() && r.size() == 4) {
+                    opts.ignore_regions.push_back({
+                        r[0].get<int>(), r[1].get<int>(),
+                        r[2].get<int>(), r[3].get<int>()
+                    });
+                }
+            }
+        }
+
+        auto diff = compare_images(reference, actual, opts);
+        py_newbool(py_retval(), diff.passed);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// --- Log capture ---
+
+static bool py_lvv_set_log_capture(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    bool enable = py_tobool(py_arg(0));
+    if (!check_protocol()) return false;
+    try {
+        bool ok = g_protocol->set_log_capture(enable);
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_get_logs(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+    try {
+        auto resp = g_protocol->get_logs();
+        py_newstr(py_retval(), resp.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_clear_logs(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+    try {
+        bool ok = g_protocol->clear_logs();
+        py_newbool(py_retval(), ok);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// --- Performance metrics ---
+
+static bool py_lvv_get_metrics(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(0);
+    if (!check_protocol()) return false;
+    try {
+        auto resp = g_protocol->get_metrics();
+        py_newstr(py_retval(), resp.dump().c_str());
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
 static bool py_lvv_wait(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(1);
     int ms = py_toint(py_arg(0));
@@ -347,6 +459,132 @@ static bool py_lvv_assert_value(int argc, py_StackRef argv) {
             return py_exception(tp_AssertionError,
                 "Widget '%s' property '%s': expected '%s', got '%s'",
                 name.c_str(), prop, expected, actual_val.c_str());
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// Helper: get a widget property value as a string.
+// Returns empty string and sets err_out on failure.
+static std::string get_prop_value(const std::string& name, const char* prop,
+                                  std::string& err_out) {
+    auto props = g_protocol->get_props(name, prop);
+    if (!props.contains(prop)) {
+        err_out = "Widget '" + name + "' has no property '" + prop + "'";
+        return {};
+    }
+    std::string val = props[prop].dump();
+    if (val.size() >= 2 && val.front() == '"') {
+        val = val.substr(1, val.size() - 2);
+    }
+    return val;
+}
+
+static bool py_lvv_assert_range(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(4);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    double min_val = py_tofloat(py_arg(2));
+    double max_val = py_tofloat(py_arg(3));
+    if (!check_protocol()) return false;
+
+    try {
+        std::string err;
+        auto val_str = get_prop_value(name, prop, err);
+        if (!err.empty()) return py_exception(tp_RuntimeError, "%s", err.c_str());
+
+        double actual;
+        try { actual = std::stod(val_str); }
+        catch (...) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': '%s' is not a number",
+                name.c_str(), prop, val_str.c_str());
+        }
+
+        if (actual < min_val || actual > max_val) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': %.4g not in range [%.4g, %.4g]",
+                name.c_str(), prop, actual, min_val, max_val);
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_assert_match(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(3);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    const char* pattern = py_tostr(py_arg(2));
+    if (!check_protocol()) return false;
+
+    try {
+        std::string err;
+        auto val_str = get_prop_value(name, prop, err);
+        if (!err.empty()) return py_exception(tp_RuntimeError, "%s", err.c_str());
+
+        std::regex re;
+        try { re = std::regex(pattern); }
+        catch (const std::regex_error& e) {
+            return py_exception(tp_ValueError, "Invalid regex '%s': %s",
+                pattern, e.what());
+        }
+
+        if (!std::regex_search(val_str, re)) {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': '%s' does not match /%s/",
+                name.c_str(), prop, val_str.c_str(), pattern);
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_assert_true(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        std::string err;
+        auto val_str = get_prop_value(name, prop, err);
+        if (!err.empty()) return py_exception(tp_RuntimeError, "%s", err.c_str());
+
+        if (val_str != "true" && val_str != "1") {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': expected true, got '%s'",
+                name.c_str(), prop, val_str.c_str());
+        }
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_assert_false(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(2);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    const char* prop = py_tostr(py_arg(1));
+    if (!check_protocol()) return false;
+
+    try {
+        std::string err;
+        auto val_str = get_prop_value(name, prop, err);
+        if (!err.empty()) return py_exception(tp_RuntimeError, "%s", err.c_str());
+
+        if (val_str != "false" && val_str != "0") {
+            return py_exception(tp_AssertionError,
+                "Widget '%s' property '%s': expected false, got '%s'",
+                name.c_str(), prop, val_str.c_str());
         }
         py_newbool(py_retval(), true);
         return true;
@@ -845,6 +1083,10 @@ void lvv_module_register() {
     py_bind(mod, "assert_visible(name)", py_lvv_assert_visible);
     py_bind(mod, "assert_hidden(name)", py_lvv_assert_hidden);
     py_bind(mod, "assert_value(name, prop, expected)", py_lvv_assert_value);
+    py_bind(mod, "assert_range(name, prop, min, max)", py_lvv_assert_range);
+    py_bind(mod, "assert_match(name, prop, pattern)", py_lvv_assert_match);
+    py_bind(mod, "assert_true(name, prop)", py_lvv_assert_true);
+    py_bind(mod, "assert_false(name, prop)", py_lvv_assert_false);
     py_bind(mod, "get_tree()", py_lvv_get_tree);
     py_bind(mod, "find(name)", py_lvv_find);
     py_bind(mod, "find_at(x, y)", py_lvv_find_at);
@@ -865,6 +1107,18 @@ void lvv_module_register() {
 
     // Retry-aware find
     py_bind(mod, "find_with_retry(selector, timeout)", py_lvv_find_with_retry);
+
+    // Screenshot compare with ignore regions
+    py_bind(mod, "screenshot_compare_ex(ref_path, threshold, ignore_json)",
+            py_lvv_screenshot_compare_ex);
+
+    // Log capture
+    py_bind(mod, "set_log_capture(enable)", py_lvv_set_log_capture);
+    py_bind(mod, "get_logs()", py_lvv_get_logs);
+    py_bind(mod, "clear_logs()", py_lvv_clear_logs);
+
+    // Performance metrics
+    py_bind(mod, "get_metrics()", py_lvv_get_metrics);
 }
 
 } // namespace lvv

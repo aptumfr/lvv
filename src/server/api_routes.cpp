@@ -319,6 +319,14 @@ void register_api_routes(CrowApp& app,
             CompareOptions opts;
             opts.diff_threshold = body->value("threshold", 0.1);
             opts.color_threshold = body->value("color_threshold", 10.0);
+            if (body->contains("ignore_regions")) {
+                for (const auto& r : (*body)["ignore_regions"]) {
+                    opts.ignore_regions.push_back({
+                        r.value("x", 0), r.value("y", 0),
+                        r.value("width", 0), r.value("height", 0)
+                    });
+                }
+            }
             auto diff = compare_images(reference, actual, opts);
 
             return {{"passed", diff.passed}, {"identical", diff.identical},
@@ -408,6 +416,41 @@ void register_api_routes(CrowApp& app,
     ([protocol]() {
         return json_route([&]() -> nlohmann::json {
             return {{"version", protocol->ping()}};
+        });
+    });
+
+    // --- Log capture ---
+
+    CROW_ROUTE(app, "/api/logs")
+    ([protocol]() {
+        return json_route([&]() -> nlohmann::json {
+            return protocol->get_logs();
+        });
+    });
+
+    CROW_ROUTE(app, "/api/logs/clear").methods("POST"_method)
+    ([protocol](const crow::request&) {
+        return json_route([&]() -> nlohmann::json {
+            return {{"success", protocol->clear_logs()}};
+        });
+    });
+
+    CROW_ROUTE(app, "/api/logs/capture").methods("POST"_method)
+    ([protocol](const crow::request& req) {
+        auto body = parse_body(req);
+        if (!body) return crow::response(400, R"({"error":"Invalid JSON"})");
+        bool enable = body->value("enable", true);
+        return json_route([&, enable]() -> nlohmann::json {
+            return {{"success", protocol->set_log_capture(enable)}};
+        });
+    });
+
+    // --- Performance metrics ---
+
+    CROW_ROUTE(app, "/api/metrics")
+    ([protocol]() {
+        return json_route([&]() -> nlohmann::json {
+            return protocol->get_metrics();
         });
     });
 }

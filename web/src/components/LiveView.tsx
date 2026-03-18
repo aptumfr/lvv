@@ -17,6 +17,7 @@ export function LiveView() {
   const [hoverInfo, setHoverInfo] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
+  const dragStartTime = useRef<number>(0);
 
   // Draw frames from WebSocket with sequencing to prevent out-of-order rendering
   const frameSeq = useRef(0);
@@ -83,6 +84,7 @@ export function LiveView() {
 
     setDragStart(coords);
     setDragCurrent(coords);
+    dragStartTime.current = Date.now();
     ws.press(coords.x, coords.y);
   };
 
@@ -106,10 +108,19 @@ export function LiveView() {
     const dx = Math.abs(coords.x - start.x);
     const dy = Math.abs(coords.y - start.y);
     const wasDrag = dx > 10 || dy > 10;
+    const elapsed = Date.now() - dragStartTime.current;
 
     if (recording) {
+      addRecordedStep('lvv.wait(200)');
+
       if (wasDrag) {
-        addRecordedStep(`lvv.swipe(${start.x}, ${start.y}, ${coords.x}, ${coords.y}, 300)`);
+        // Use drag for slow movements (>400ms), swipe for quick ones
+        const duration = Math.max(Math.round(elapsed), 200);
+        if (elapsed > 400) {
+          addRecordedStep(`lvv.drag(${start.x}, ${start.y}, ${coords.x}, ${coords.y}, ${duration})`);
+        } else {
+          addRecordedStep(`lvv.swipe(${start.x}, ${start.y}, ${coords.x}, ${coords.y}, ${duration})`);
+        }
         return;
       }
 
@@ -187,6 +198,9 @@ export function LiveView() {
         >
           Screenshot
         </button>
+        {recording && (
+          <span className="text-xs text-red-400 ml-2 animate-pulse">Recording</span>
+        )}
         {hoverInfo && (
           <span className="text-xs text-slate-400 ml-auto font-mono">{hoverInfo}</span>
         )}
@@ -194,7 +208,9 @@ export function LiveView() {
       <div className="flex-1 overflow-auto p-2 flex items-center justify-center bg-slate-900">
         <canvas
           ref={canvasRef}
-          className="max-w-full max-h-full object-contain border border-slate-600 cursor-crosshair"
+          className={`max-w-full max-h-full object-contain border cursor-crosshair ${
+            recording ? 'border-red-500' : 'border-slate-600'
+          }`}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
           onMouseMove={handleMouseMove}

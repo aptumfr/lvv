@@ -36,6 +36,14 @@ public:
     nlohmann::json get_props(const std::string& selector, const std::string& prop = "");
     ScreenInfo get_screen_info();
 
+    // Log capture
+    nlohmann::json get_logs();
+    bool clear_logs();
+    bool set_log_capture(bool enable);
+
+    // Performance metrics
+    nlohmann::json get_metrics();
+
     // Compound gestures (implemented client-side, no new protocol commands)
     // The optional cancel callback is polled during sleeps; returning true aborts the gesture.
     using CancelFn = std::function<bool()>;

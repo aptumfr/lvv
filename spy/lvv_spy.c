@@ -14,11 +14,12 @@
 #include <string.h>
 #include <errno.h>
 
-/* LVGL private headers for strip-based rendering */
+/* LVGL private headers for strip-based rendering and log globals */
 #include "src/draw/lv_draw_private.h"
 #include "src/core/lv_obj_draw_private.h"
 #include "src/core/lv_refr_private.h"
 #include "src/display/lv_display_private.h"
+#include "src/core/lv_global.h"
 
 /* POSIX networking */
 #include <sys/socket.h>
@@ -35,6 +36,8 @@
 #define LVV_MAX_RESP_LEN  (1 * 1024 * 1024)  /* 1MB for tree responses */
 #define LVV_MAX_TREE_DEPTH 32
 #define LVV_STRIP_HEIGHT   60  /* rows per screenshot strip */
+#define LVV_LOG_RING_SIZE  64  /* max captured log entries */
+#define LVV_LOG_MAX_LEN    256 /* max chars per log entry */
 
 /* ======================== State ======================== */
 
@@ -42,6 +45,18 @@ static int s_listen_fd = -1;
 static int s_client_fd = -1;
 static char s_cmd_buf[LVV_MAX_CMD_LEN];
 static int s_cmd_len = 0;
+
+/* --- Log capture ring buffer --- */
+static char s_log_ring[LVV_LOG_RING_SIZE][LVV_LOG_MAX_LEN];
+static int  s_log_head = 0;   /* next write position */
+static int  s_log_count = 0;  /* entries in buffer */
+static bool s_log_capturing = false;
+static lv_log_print_g_cb_t s_prev_log_cb = NULL;
+
+/* --- Performance metrics --- */
+static uint32_t s_poll_count = 0;      /* calls to lvv_spy_process() in current window */
+static uint32_t s_poll_timestamp = 0;  /* start of current 1s window */
+static uint32_t s_poll_rate = 0;       /* polls per second (last complete window) */
 static char* s_resp_buf = NULL;
 
 /* ======================== Helpers ======================== */
@@ -137,6 +152,39 @@ static bool json_get_int(const char* json, const char* key, int* out) {
     if (end == pos) return false;
     *out = (int)val;
     return true;
+}
+
+/* ======================== Log Capture ======================== */
+
+static void lvv_log_cb(lv_log_level_t level, const char* buf) {
+    /* Forward to previous callback so app logging isn't lost */
+    if (s_prev_log_cb) s_prev_log_cb(level, buf);
+    if (!s_log_capturing) return;
+    /* Store in ring buffer */
+    strncpy(s_log_ring[s_log_head], buf, LVV_LOG_MAX_LEN - 1);
+    s_log_ring[s_log_head][LVV_LOG_MAX_LEN - 1] = '\0';
+    /* Strip trailing newline */
+    int len = (int)strlen(s_log_ring[s_log_head]);
+    if (len > 0 && s_log_ring[s_log_head][len - 1] == '\n') {
+        s_log_ring[s_log_head][len - 1] = '\0';
+    }
+    s_log_head = (s_log_head + 1) % LVV_LOG_RING_SIZE;
+    if (s_log_count < LVV_LOG_RING_SIZE) s_log_count++;
+}
+
+/* ======================== Performance Metrics ======================== */
+
+/* Called from lvv_spy_process() to track poll rate */
+static void lvv_update_metrics(void) {
+    uint32_t now = lv_tick_get();
+    s_poll_count++;
+    if (s_poll_timestamp == 0) s_poll_timestamp = now;
+    uint32_t elapsed = now - s_poll_timestamp;
+    if (elapsed >= 1000) {
+        s_poll_rate = (uint32_t)((uint64_t)s_poll_count * 1000 / elapsed);
+        s_poll_count = 0;
+        s_poll_timestamp = now;
+    }
 }
 
 /* ======================== Widget Type Names ======================== */
@@ -774,6 +822,47 @@ static void process_command(const char* cmd) {
         inject_release();
         resp_append("{\"success\":true}");
     }
+    else if (strcmp(cmd_name, "get_logs") == 0) {
+        resp_append("{\"logs\":[");
+        if (s_log_count > 0) {
+            int start = (s_log_count < LVV_LOG_RING_SIZE)
+                ? 0
+                : s_log_head;  /* oldest entry when ring is full */
+            for (int i = 0; i < s_log_count; i++) {
+                int idx = (start + i) % LVV_LOG_RING_SIZE;
+                if (i > 0) resp_append(",");
+                resp_append_str(s_log_ring[idx]);
+            }
+        }
+        resp_append("]}");
+    }
+    else if (strcmp(cmd_name, "clear_logs") == 0) {
+        s_log_count = 0;
+        s_log_head = 0;
+        resp_append("{\"success\":true}");
+    }
+    else if (strcmp(cmd_name, "set_log_capture") == 0) {
+        int enable = 0;
+        json_get_int(cmd, "enable", &enable);
+        if (enable && !s_log_capturing) {
+            lv_log_register_print_cb(lvv_log_cb);
+            s_log_capturing = true;
+        } else if (!enable && s_log_capturing) {
+            /* Restore app's original callback (kept for future re-enable) */
+            lv_log_register_print_cb(s_prev_log_cb);
+            s_log_capturing = false;
+        }
+        resp_append("{\"success\":true,\"capturing\":");
+        resp_append_bool(s_log_capturing);
+        resp_append("}");
+    }
+    else if (strcmp(cmd_name, "get_metrics") == 0) {
+        resp_append("{\"poll_rate\":");
+        resp_append_int(s_poll_rate);
+        resp_append(",\"uptime_ms\":");
+        resp_append_int(lv_tick_get());
+        resp_append("}");
+    }
     else {
         resp_append("{\"error\":\"Unknown command: ");
         resp_append(cmd_name);
@@ -851,6 +940,9 @@ static void read_client(void) {
 /* ======================== Public API ======================== */
 
 bool lvv_spy_init(uint16_t port) {
+    /* Save the app's existing log callback so we can restore it later */
+    s_prev_log_cb = LV_GLOBAL_DEFAULT()->custom_log_print_cb;
+
     s_resp_buf = (char*)malloc(LVV_MAX_RESP_LEN);
     if (!s_resp_buf) {
         fprintf(stderr, "[lvv_spy] Failed to allocate response buffer\n");
@@ -894,6 +986,7 @@ bool lvv_spy_init(uint16_t port) {
 
 void lvv_spy_process(void) {
     if (s_listen_fd < 0) return;
+    lvv_update_metrics();
 
     /* Check for new connections */
     struct pollfd pfds[2];
