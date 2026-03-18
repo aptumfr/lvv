@@ -1,6 +1,7 @@
 #include "app/app.hpp"
 #include "core/log.hpp"
 #include <CLI11.hpp>
+#include <cstdlib>
 #include <iostream>
 
 int main(int argc, char** argv) {
@@ -10,11 +11,11 @@ int main(int argc, char** argv) {
     lvv::AppConfig config;
     config.static_dir = lvv::default_static_dir();
 
-    // Global connection options
+    // Global connection options (env vars as defaults)
     cli.add_option("--host", config.target_host, "Target host")
-        ->default_val("localhost");
+        ->default_val(std::string(std::getenv("LVV_HOST") ? std::getenv("LVV_HOST") : "localhost"));
     cli.add_option("--port", config.target_port, "Target port")
-        ->default_val(5555);
+        ->default_val(std::getenv("LVV_PORT") ? std::atoi(std::getenv("LVV_PORT")) : 5555);
     cli.add_option("--serial", config.serial_device,
                    "Serial device (e.g. /dev/ttyUSB0)");
     cli.add_option("--baud", config.serial_baud, "Serial baud rate")

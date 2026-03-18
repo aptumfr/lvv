@@ -1,0 +1,81 @@
+# Headless CI image for running LVV tests without a display
+#
+# The build context must include lvgl and lv repos as siblings.
+# From the parent directory containing lvgl/, lv/, and lv2/:
+#
+#   docker build -f lv2/Dockerfile.ci -t lvv-ci .
+#
+# Run tests:
+#   docker run --rm lvv-ci
+#
+# Run specific tests:
+#   docker run --rm lvv-ci lvv run tests/example_tests/test_selectors.py
+
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy all three repos (build context is the parent directory)
+COPY lvgl/ lvgl/
+COPY lv/   lv/
+COPY lv2/  lv2/
+
+# Build lvv (host tool)
+RUN cd lv2 && mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build . -j$(nproc)
+
+# Build headless demo (point to sibling repos via env vars)
+ENV LVGL_DIR=/src/lvgl
+ENV LV_CPP_DIR=/src/lv
+RUN cd lv2/example && mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build . -j$(nproc) --target demo_headless
+
+# --- Runtime image ---
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/lv2/build/lvv /usr/local/bin/lvv
+COPY --from=builder /src/lv2/example/build/demo_headless /usr/local/bin/demo_headless
+COPY --from=builder /src/lv2/tests /tests
+
+# Entrypoint: start headless demo in background, run tests, exit
+COPY <<'ENTRYPOINT' /entrypoint.sh
+#!/bin/bash
+set -e
+
+# Start headless demo
+demo_headless &
+DEMO_PID=$!
+
+# Wait for spy to be ready (up to 10s)
+for i in $(seq 1 20); do
+    if lvv --port 5555 ping >/dev/null 2>&1; then break; fi
+    if [ $i -eq 20 ]; then echo "Spy not ready after 10s"; exit 1; fi
+    sleep 0.5
+done
+
+# Run tests (use arguments if provided, otherwise run all)
+if [ $# -gt 0 ]; then
+    lvv --port 5555 "$@"
+else
+    lvv --port 5555 run --output /results/results.xml /tests/example_tests/
+fi
+EXIT_CODE=$?
+
+kill $DEMO_PID 2>/dev/null || true
+exit $EXIT_CODE
+ENTRYPOINT
+
+RUN chmod +x /entrypoint.sh
+RUN mkdir -p /results
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -67,6 +67,17 @@ int main() {
 
 Link against `lvv_spy` and `lvgl`. See `example/CMakeLists.txt` for a complete build setup.
 
+## Environment Variables
+
+| Variable | Used by | Description |
+|---|---|---|
+| `LVGL_DIR` | example CMake | Path to LVGL repo (default: `../../lvgl`) |
+| `LV_CPP_DIR` | example CMake | Path to lv:: C++ wrapper repo (default: `../../lv`) |
+| `LVV_HOST` | `lvv` CLI | Default target host (overridden by `--host`) |
+| `LVV_PORT` | `lvv` CLI | Default target port (overridden by `--port`) |
+
+CMake variables can also be set directly: `cmake .. -DLVGL_DIR=/path/to/lvgl`.
+
 ## Usage
 
 LVV has five subcommands: `ping`, `tree`, `screenshot`, `run`, and `serve`.
@@ -236,6 +247,7 @@ The `example/` directory contains sample LVGL apps with the spy enabled:
 
 - **counter_with_spy** - Simple counter with 3 buttons
 - **demo_with_spy** - Multi-screen app with settings, list, and dialog screens
+- **demo_headless** - Same demo, no display required (for CI)
 
 Build them separately:
 
@@ -245,8 +257,11 @@ mkdir build && cd build
 cmake ..
 cmake --build . -j$(nproc)
 
-# Run the demo
+# Run the demo (needs X11 or SDL)
 ./demo_with_spy
+
+# Or run headless (no display needed)
+./demo_headless
 ```
 
 Then in another terminal:
@@ -256,6 +271,38 @@ lvv --port 5555 tree
 lvv --port 5555 run tests/example_tests/test_navigation.py
 lvv --port 5555 serve
 ```
+
+## Headless CI
+
+Run tests in Docker or CI without any display server. The headless driver creates an
+LVGL display with no output — the spy's screenshot command still works using LVGL's
+internal draw engine.
+
+Add to your LVGL app:
+
+```c
+#include "lvv_headless.h"
+#include "lvv_spy.h"
+
+int main() {
+    lv_init();
+    lvv_headless_create(800, 480);
+    build_ui();
+    lvv_spy_init(5555);
+    lvv_headless_run();  // blocks, runs LVGL + spy loop
+}
+```
+
+Or compile an existing app with `-DLVV_HEADLESS` to switch display backends.
+
+**Docker** (run from the parent directory containing `lvgl/`, `lv/`, and `lv2/`):
+
+```bash
+docker build -f lv2/Dockerfile.ci -t lvv-ci .
+docker run --rm lvv-ci
+```
+
+**GitHub Actions:** See `.github/workflows/ci.yml` for a ready-made workflow.
 
 ## Documentation
 

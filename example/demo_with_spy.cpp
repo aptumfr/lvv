@@ -20,6 +20,9 @@
 
 extern "C" {
 #include "lvv_spy.h"
+#ifdef LVV_HEADLESS
+#include "lvv_headless.h"
+#endif
 }
 
 #if LV_USE_OBSERVER
@@ -293,12 +296,15 @@ private:
 int main() {
     lv::init();
 
-#if LV_USE_X11
+#if defined(LVV_HEADLESS)
+    // Headless mode for CI: no display hardware needed
+    if (!lvv_headless_create(800, 480)) return 1;
+#elif LV_USE_X11
     lv::X11Display display("LVV Demo + Spy", 800, 480, &lv::cursor_arrow);
 #elif LV_USE_SDL
     lv::SDLDisplay display(800, 480);
 #else
-    #error "No display backend enabled"
+    #error "No display backend enabled (use -DLVV_HEADLESS for CI)"
 #endif
 
 #if LV_USE_OBSERVER
@@ -325,8 +331,12 @@ int main() {
         return 1;
     }
 
+#if defined(LVV_HEADLESS)
+    lvv_headless_run();
+#else
     lv::run_with([]() {
         lvv_spy_process();
         return true;
     });
+#endif
 }

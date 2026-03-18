@@ -4,10 +4,17 @@ project(lvv_example LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Paths
-set(LV_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lv")
-set(LVGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lvgl")
-set(SPY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../spy")
+# Paths — configurable via cmake -D, env var, or default to sibling dirs
+set(LV_CPP_DIR "$ENV{LV_CPP_DIR}" CACHE PATH "Path to lv:: C++ wrapper repo")
+set(LVGL_DIR "$ENV{LVGL_DIR}" CACHE PATH "Path to LVGL repo")
+set(SPY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../spy" CACHE PATH "Path to LVV spy sources")
+
+if(LV_CPP_DIR STREQUAL "")
+    set(LV_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lv")
+endif()
+if(LVGL_DIR STREQUAL "")
+    set(LVGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lvgl")
+endif()
 
 # Build LVGL (it finds lv_conf.h in its parent dir — the lv project has it)
 # We need lv_conf.h to be visible. Set the include path explicitly.
@@ -29,6 +36,11 @@ add_library(lvv_spy STATIC ${SPY_DIR}/lvv_spy.c)
 target_include_directories(lvv_spy PUBLIC ${SPY_DIR})
 target_link_libraries(lvv_spy PUBLIC lvgl)
 
+# Headless display driver
+add_library(lvv_headless STATIC ${SPY_DIR}/lvv_headless.c)
+target_include_directories(lvv_headless PUBLIC ${SPY_DIR})
+target_link_libraries(lvv_headless PUBLIC lvgl lvv_spy)
+
 # Counter with spy
 add_executable(counter_with_spy counter_with_spy.cpp)
 target_link_libraries(counter_with_spy PRIVATE lv_cpp lvv_spy)
@@ -36,6 +48,11 @@ target_link_libraries(counter_with_spy PRIVATE lv_cpp lvv_spy)
 # Demo with spy (rich UI for test automation)
 add_executable(demo_with_spy demo_with_spy.cpp)
 target_link_libraries(demo_with_spy PRIVATE lv_cpp lvv_spy)
+
+# Demo headless (for CI - no X11/SDL needed)
+add_executable(demo_headless demo_with_spy.cpp)
+target_link_libraries(demo_headless PRIVATE lv_cpp lvv_spy lvv_headless)
+target_compile_definitions(demo_headless PRIVATE LVV_HEADLESS)
 
 # Find X11
 find_package(X11 QUIET)
