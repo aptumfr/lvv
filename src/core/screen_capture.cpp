@@ -3,6 +3,9 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 
+#include <jpeglib.h>
+
+#include <csetjmp>
 #include <cstring>
 
 namespace lvv {
@@ -108,23 +111,90 @@ std::vector<uint8_t> encode_png(const Image& img) {
     return out;
 }
 
+// libjpeg error handler that longjmps instead of calling exit()
+struct JpegErrorMgr {
+    jpeg_error_mgr pub;
+    std::jmp_buf   jmp;
+};
+
+static void jpeg_error_exit(j_common_ptr cinfo) {
+    auto* err = reinterpret_cast<JpegErrorMgr*>(cinfo->err);
+    std::longjmp(err->jmp, 1);
+}
+
+// Memory destination manager for libjpeg (writes to std::vector)
+static void jpeg_mem_init_destination(j_compress_ptr cinfo) {
+    auto* out = static_cast<std::vector<uint8_t>*>(cinfo->client_data);
+    out->resize(4096);
+    cinfo->dest->next_output_byte = out->data();
+    cinfo->dest->free_in_buffer = out->size();
+}
+
+static boolean jpeg_mem_empty_output_buffer(j_compress_ptr cinfo) {
+    auto* out = static_cast<std::vector<uint8_t>*>(cinfo->client_data);
+    size_t old_size = out->size();
+    out->resize(old_size * 2);
+    cinfo->dest->next_output_byte = out->data() + old_size;
+    cinfo->dest->free_in_buffer = out->size() - old_size;
+    return TRUE;
+}
+
+static void jpeg_mem_term_destination(j_compress_ptr cinfo) {
+    auto* out = static_cast<std::vector<uint8_t>*>(cinfo->client_data);
+    out->resize(out->size() - cinfo->dest->free_in_buffer);
+}
+
 std::vector<uint8_t> encode_jpeg(const Image& img, int quality) {
     std::vector<uint8_t> out;
-    // stb JPEG expects RGB (3 channels), strip alpha
-    std::vector<uint8_t> rgb(static_cast<size_t>(img.width) * img.height * 3);
-    const uint8_t* src = img.pixels.data();
-    uint8_t* dst = rgb.data();
-    for (int i = 0; i < img.width * img.height; i++) {
-        dst[0] = src[0];
-        dst[1] = src[1];
-        dst[2] = src[2];
-        src += 4;
-        dst += 3;
+    if (!img.valid()) return out;
+
+    jpeg_compress_struct cinfo{};
+    JpegErrorMgr jerr{};
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jpeg_error_exit;
+
+    if (setjmp(jerr.jmp)) {
+        jpeg_destroy_compress(&cinfo);
+        return {};
     }
-    stbi_write_jpg_to_func(
-        write_callback, &out,
-        img.width, img.height, 3,
-        rgb.data(), quality);
+
+    jpeg_create_compress(&cinfo);
+
+    // Set up memory destination
+    jpeg_destination_mgr dest{};
+    dest.init_destination = jpeg_mem_init_destination;
+    dest.empty_output_buffer = jpeg_mem_empty_output_buffer;
+    dest.term_destination = jpeg_mem_term_destination;
+    cinfo.dest = &dest;
+    cinfo.client_data = &out;
+
+    cinfo.image_width = img.width;
+    cinfo.image_height = img.height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    // Feed scanlines, stripping alpha channel
+    std::vector<uint8_t> row(img.width * 3);
+    while (cinfo.next_scanline < cinfo.image_height) {
+        const uint8_t* src = img.pixels.data() + cinfo.next_scanline * img.width * 4;
+        uint8_t* dst = row.data();
+        for (int x = 0; x < img.width; x++) {
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+            src += 4;
+            dst += 3;
+        }
+        uint8_t* row_ptr = row.data();
+        jpeg_write_scanlines(&cinfo, &row_ptr, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
     return out;
 }
 

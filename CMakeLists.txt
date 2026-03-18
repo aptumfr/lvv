@@ -7,6 +7,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Third-party dependencies ---
 find_package(Threads REQUIRED)
+find_package(JPEG REQUIRED)
+if(JPEG_FOUND)
+    message(STATUS "JPEG library: ${JPEG_LIBRARIES}")
+endif()
 
 # PocketPy (C library)
 add_library(pocketpy STATIC third_party/pocketpy/pocketpy.c)
@@ -51,6 +55,7 @@ target_include_directories(lvv PRIVATE
 target_link_libraries(lvv PRIVATE
     pocketpy
     stb
+    JPEG::JPEG
     Threads::Threads
 )
 
@@ -102,6 +107,7 @@ if(LVV_BUILD_TESTS)
 
     target_link_libraries(lvv_tests PRIVATE
         stb
+        JPEG::JPEG
         doctest::doctest
     )
 
