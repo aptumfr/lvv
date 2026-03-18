@@ -3,8 +3,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 export function useWebSocket(url: string, onDisconnect?: () => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
-  const [lastFrame, setLastFrame] = useState<string | null>(null);
-  const prevFrameUrl = useRef<string | null>(null);
+  const [lastFrame, setLastFrame] = useState<ImageBitmap | null>(null);
+  const frameSeq = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const onDisconnectRef = useRef(onDisconnect);
@@ -30,13 +30,12 @@ export function useWebSocket(url: string, onDisconnect?: () => void) {
 
     ws.onmessage = (event) => {
       if (event.data instanceof Blob) {
-        // Binary message = JPEG frame
-        if (prevFrameUrl.current) {
-          URL.revokeObjectURL(prevFrameUrl.current);
-        }
-        const frameUrl = URL.createObjectURL(event.data);
-        prevFrameUrl.current = frameUrl;
-        setLastFrame(frameUrl);
+        // Binary message = JPEG frame — decode off main thread
+        const seq = ++frameSeq.current;
+        createImageBitmap(event.data).then(bitmap => {
+          if (seq !== frameSeq.current) { bitmap.close(); return; } // stale
+          setLastFrame(prev => { prev?.close(); return bitmap; });
+        }).catch(() => {});
       }
     };
 
@@ -49,7 +48,6 @@ export function useWebSocket(url: string, onDisconnect?: () => void) {
     return () => {
       mountedRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
       wsRef.current?.close();
     };
   }, [connectWs]);

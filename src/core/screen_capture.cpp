@@ -177,8 +177,9 @@ std::vector<uint8_t> encode_jpeg(const Image& img, int quality) {
     jpeg_set_quality(&cinfo, quality, TRUE);
     jpeg_start_compress(&cinfo, TRUE);
 
-    // Feed scanlines, stripping alpha channel
-    std::vector<uint8_t> row(img.width * 3);
+    // Feed scanlines, stripping alpha channel (reuse buffer across calls)
+    static thread_local std::vector<uint8_t> row;
+    row.resize(img.width * 3);
     while (cinfo.next_scanline < cinfo.image_height) {
         const uint8_t* src = img.pixels.data() + cinfo.next_scanline * img.width * 4;
         uint8_t* dst = row.data();

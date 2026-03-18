@@ -65,7 +65,30 @@ nlohmann::json Protocol::get_tree(const std::string& root) {
     if (!root.empty()) {
         cmd["root"] = root;
     }
-    return send_command(cmd);
+    auto result = send_command(cmd);
+    {
+        std::lock_guard lock(cache_mutex_);
+        tree_cache_ = result;
+        tree_cache_time_ = std::chrono::steady_clock::now();
+    }
+    return result;
+}
+
+nlohmann::json Protocol::get_tree_cached(int ttl_ms) {
+    {
+        std::lock_guard lock(cache_mutex_);
+        auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - tree_cache_time_);
+        if (!tree_cache_.is_null() && age.count() < ttl_ms) {
+            return tree_cache_;
+        }
+    }
+    return get_tree();
+}
+
+void Protocol::invalidate_tree_cache() {
+    std::lock_guard lock(cache_mutex_);
+    tree_cache_ = nullptr;
 }
 
 std::optional<WidgetInfo> Protocol::find(const std::string& selector) {
@@ -81,6 +104,7 @@ std::optional<WidgetInfo> Protocol::find(const std::string& selector) {
 bool Protocol::fire_and_forget(const nlohmann::json& cmd) {
     try {
         send_command(cmd);
+        invalidate_tree_cache();  // UI state may have changed
         return true;
     } catch (...) {
         return false;

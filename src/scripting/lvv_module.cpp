@@ -598,7 +598,7 @@ static bool py_lvv_get_tree(int argc, py_StackRef argv) {
     if (!check_protocol()) return false;
 
     try {
-        auto tree = g_protocol->get_tree();
+        auto tree = g_protocol->get_tree_cached();
         // Return as string (JSON) — PocketPy doesn't have dict literal creation easily
         std::string json_str = tree.dump();
         py_newstr(py_retval(), json_str.c_str());
@@ -675,7 +675,7 @@ static bool py_lvv_find_at(int argc, py_StackRef argv) {
     if (!check_protocol()) return false;
 
     try {
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = g_protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
 
@@ -707,7 +707,7 @@ static bool py_lvv_get_all_widgets(int argc, py_StackRef argv) {
     if (!check_protocol()) return false;
 
     try {
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = g_protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
 
@@ -747,7 +747,7 @@ static bool py_lvv_find_by(int argc, py_StackRef argv) {
         if (!err.empty())
             return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
 
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = g_protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
 
@@ -784,7 +784,7 @@ static bool py_lvv_find_all_by(int argc, py_StackRef argv) {
         if (!err.empty())
             return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
 
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = g_protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
 
@@ -878,7 +878,7 @@ static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
 
         try {
             if (is_selector) {
-                auto tree_json = g_protocol->get_tree();
+                auto tree_json = g_protocol->get_tree_cached();
                 WidgetTree tree;
                 tree.update(tree_json);
                 auto widget = tree.find_by_selector(sel);
@@ -948,7 +948,7 @@ static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
 
 // Helper: find a visible widget by pre-parsed selector
 static std::optional<WidgetInfo> find_visible_by_selector(const WidgetSelector& sel) {
-    auto tree_json = g_protocol->get_tree();
+    auto tree_json = g_protocol->get_tree_cached();
     WidgetTree tree;
     tree.update(tree_json);
     auto widget = tree.find_by_selector(sel);

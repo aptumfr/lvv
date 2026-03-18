@@ -18,22 +18,16 @@ export function LiveView() {
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
   const dragStartTime = useRef<number>(0);
+  const hoverThrottle = useRef<number>(0);
 
-  // Draw frames from WebSocket with sequencing to prevent out-of-order rendering
-  const frameSeq = useRef(0);
+  // Draw frames — ImageBitmap already decoded off main thread, sequenced in useWebSocket
   useEffect(() => {
     if (!ws.lastFrame || !canvasRef.current) return;
-    const seq = ++frameSeq.current;
-    const img = new Image();
-    img.onload = () => {
-      if (seq !== frameSeq.current) return; // stale frame, drop it
-      const canvas = canvasRef.current!;
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0);
-    };
-    img.src = ws.lastFrame;
+    const canvas = canvasRef.current;
+    canvas.width = ws.lastFrame.width;
+    canvas.height = ws.lastFrame.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(ws.lastFrame, 0, 0);
   }, [ws.lastFrame]);
 
   // Gray-fill the canvas when target disconnects
@@ -156,7 +150,13 @@ export function LiveView() {
     if (!canInteract) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
-    setHoverInfo(`${coords.x}, ${coords.y}`);
+
+    // Throttle hover info updates to ~30fps
+    const now = Date.now();
+    if (now - hoverThrottle.current > 33) {
+      hoverThrottle.current = now;
+      setHoverInfo(`${coords.x}, ${coords.y}`);
+    }
 
     if (!dragStart) return;
 

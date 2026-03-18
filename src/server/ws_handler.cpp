@@ -87,11 +87,15 @@ void WSHandler::broadcast(const std::string& message) {
     }
 }
 
-void WSHandler::broadcast_binary(const std::vector<uint8_t>& data) {
-    std::string msg(reinterpret_cast<const char*>(data.data()), data.size());
+void WSHandler::broadcast_binary(std::string frame) {
     std::lock_guard lock(mutex_);
-    for (auto* conn : clients_) {
-        conn->send_binary(msg);
+    if (clients_.size() == 1) {
+        // Common case: single client, move without copying
+        (*clients_.begin())->send_binary(std::move(frame));
+    } else {
+        for (auto* conn : clients_) {
+            conn->send_binary(std::string(frame));
+        }
     }
 }
 
@@ -119,10 +123,10 @@ void WSHandler::start_streaming(int fps) {
                 auto img = protocol_->screenshot();
                 if (img.valid()) {
                     auto jpeg = encode_jpeg(img, 80);
-                    broadcast_binary(jpeg);
+                    broadcast_binary(std::string(
+                        reinterpret_cast<const char*>(jpeg.data()), jpeg.size()));
                 }
             } catch (...) {
-                // Screenshot failed — stop streaming rather than spinning
                 streaming_ = false;
                 break;
             }

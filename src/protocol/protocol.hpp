@@ -4,6 +4,7 @@
 #include "core/screen_capture.hpp"
 #include "transport/transport.hpp"
 #include <json.hpp>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,12 @@ public:
     // Commands matching the spy protocol
     std::string ping();
     nlohmann::json get_tree(const std::string& root = "");
+
+    /// Get tree with caching (avoids repeated round-trips within ttl_ms)
+    nlohmann::json get_tree_cached(int ttl_ms = 50);
+
+    /// Invalidate the tree cache (call after mutations like click, type, key)
+    void invalidate_tree_cache();
     std::optional<WidgetInfo> find(const std::string& selector);
     bool click(const std::string& selector);
     bool click_at(int x, int y);
@@ -58,6 +65,11 @@ private:
 
     ITransport* transport_;
     mutable std::mutex mutex_;
+
+    // Tree cache (separate mutex — cache reads must not block protocol I/O)
+    std::mutex cache_mutex_;
+    nlohmann::json tree_cache_;
+    std::chrono::steady_clock::time_point tree_cache_time_{};
 };
 
 } // namespace lvv

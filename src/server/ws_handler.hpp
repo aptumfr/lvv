@@ -25,7 +25,7 @@ public:
     void broadcast(const std::string& message);
 
     /// Broadcast binary data to all connected clients
-    void broadcast_binary(const std::vector<uint8_t>& data);
+    void broadcast_binary(std::string frame);
 
     /// Start streaming screenshots at given FPS
     void start_streaming(int fps);

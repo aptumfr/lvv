@@ -262,7 +262,7 @@ void register_api_routes(CrowApp& app,
             int x = (*body)["x"].get<int>();
             int y = (*body)["y"].get<int>();
 
-            auto tree_json = protocol->get_tree();
+            auto tree_json = protocol->get_tree_cached();
             std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
 
@@ -380,7 +380,7 @@ void register_api_routes(CrowApp& app,
         }
 
         return json_route([&, sel]() -> nlohmann::json {
-            auto tree_json = protocol->get_tree();
+            auto tree_json = protocol->get_tree_cached();
             std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
             bool find_all = body->value("all", false);
