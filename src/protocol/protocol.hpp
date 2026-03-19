@@ -13,6 +13,13 @@
 
 namespace lvv {
 
+/// Thrown by the target when a widget is not found.
+/// Distinct from std::runtime_error (transport/connection failure).
+class widget_not_found : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class Protocol {
 public:
     explicit Protocol(ITransport* transport);
@@ -21,14 +28,17 @@ public:
     void disconnect();
     bool is_connected() const;
 
-    // Commands matching the spy protocol
+    // Error handling convention:
+    //   - All methods throw std::runtime_error on transport failure (connection lost,
+    //     send/receive error). Callers must catch or let it propagate.
+    //   - find() returns nullopt when the widget doesn't exist (expected case).
+    //   - Interaction methods (click, press, etc.) return false when the target
+    //     reports a logical failure (e.g. widget not found for click-by-name).
+    //   - Query methods (get_tree, screenshot, etc.) throw on any failure.
+
     std::string ping();
     nlohmann::json get_tree(const std::string& root = "");
-
-    /// Get tree with caching (avoids repeated round-trips within ttl_ms)
     nlohmann::json get_tree_cached(int ttl_ms = 50);
-
-    /// Invalidate the tree cache (call after mutations like click, type, key)
     void invalidate_tree_cache();
     std::optional<WidgetInfo> find(const std::string& selector);
     bool click(const std::string& selector);

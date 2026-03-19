@@ -49,7 +49,12 @@ nlohmann::json Protocol::send_command(const nlohmann::json& cmd) {
     }
 
     if (j.contains("error")) {
-        throw std::runtime_error("Target error: " + j["error"].get<std::string>());
+        auto msg = j["error"].get<std::string>();
+        if (msg.find("not found") != std::string::npos ||
+            msg.find("Not found") != std::string::npos) {
+            throw widget_not_found(msg);
+        }
+        throw std::runtime_error("Target error: " + msg);
     }
 
     return j;
@@ -97,18 +102,22 @@ std::optional<WidgetInfo> Protocol::find(const std::string& selector) {
         if (resp.contains("widget")) {
             return parse_widget(resp["widget"]);
         }
-    } catch (...) {}
-    return std::nullopt;
+        return std::nullopt;
+    } catch (const widget_not_found&) {
+        return std::nullopt;
+    }
+    // std::runtime_error (transport failure) propagates to caller
 }
 
 bool Protocol::fire_and_forget(const nlohmann::json& cmd) {
     try {
         send_command(cmd);
-        invalidate_tree_cache();  // UI state may have changed
+        invalidate_tree_cache();
         return true;
-    } catch (...) {
+    } catch (const widget_not_found&) {
         return false;
     }
+    // std::runtime_error (transport failure) propagates to caller
 }
 
 bool Protocol::click(const std::string& selector) {
@@ -262,10 +271,15 @@ static bool cancellable_sleep(int ms, const Protocol::CancelFn& cancel) {
     return cancel && cancel();
 }
 
+// Best-effort release — don't throw if connection is already gone
+static void safe_release(Protocol& p) {
+    try { p.release(); } catch (...) {}
+}
+
 bool Protocol::long_press(int x, int y, int duration_ms, CancelFn cancel) {
     if (!press(x, y)) return false;
     if (cancellable_sleep(duration_ms, cancel)) {
-        release();
+        safe_release(*this);
         return false;
     }
     return release();
@@ -279,13 +293,13 @@ bool Protocol::drag(int x1, int y1, int x2, int y2, int duration_ms, int steps,
     int step_delay = duration_ms / steps;
     for (int i = 1; i <= steps; ++i) {
         if (cancellable_sleep(step_delay, cancel)) {
-            release();
+            safe_release(*this);
             return false;
         }
         int cx = x1 + (x2 - x1) * i / steps;
         int cy = y1 + (y2 - y1) * i / steps;
         if (!move_to(cx, cy)) {
-            release();
+            safe_release(*this);
             return false;
         }
     }

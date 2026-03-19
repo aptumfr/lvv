@@ -109,11 +109,13 @@ void register_api_routes(CrowApp& app,
         if (!body) return crow::response(400, "Invalid JSON");
 
         if (body->contains("name")) {
-            bool ok = protocol->click((*body)["name"].get<std::string>());
-            return json_route([&]() -> nlohmann::json { return {{"success", ok}}; });
+            return json_route([&]() -> nlohmann::json {
+                return {{"success", protocol->click((*body)["name"].get<std::string>())}};
+            });
         } else if (body->contains("x") && body->contains("y")) {
-            bool ok = protocol->click_at((*body)["x"].get<int>(), (*body)["y"].get<int>());
-            return json_route([&]() -> nlohmann::json { return {{"success", ok}}; });
+            return json_route([&]() -> nlohmann::json {
+                return {{"success", protocol->click_at((*body)["x"].get<int>(), (*body)["y"].get<int>())}};
+            });
         }
         return crow::response(400, R"({"error":"Need 'name' or 'x','y'"})");
     });
