@@ -38,7 +38,8 @@ void register_api_routes(CrowApp& app,
                          WidgetTree* tree,
                          WSHandler* ws,
                          ScriptEngine* script_engine,
-                         TestRunner* test_runner) {
+                         TestRunner* test_runner,
+                         const std::string& ref_images_dir) {
     // Health check
     CROW_ROUTE(app, "/api/health")
     ([protocol, ws]() {
@@ -213,6 +214,8 @@ void register_api_routes(CrowApp& app,
     ([script_engine, test_runner](const crow::request& req) {
         auto body = parse_body(req);
         if (!body) return crow::response(400, "Invalid JSON");
+        if (!script_engine || !test_runner)
+            return crow::response(503, R"({"error":"Script engine not available"})");
 
         if (body->contains("code")) {
             return json_route([&]() -> nlohmann::json {
@@ -290,17 +293,22 @@ void register_api_routes(CrowApp& app,
 
     // Visual diff comparison
     CROW_ROUTE(app, "/api/visual/compare").methods("POST"_method)
-    ([protocol](const crow::request& req) {
+    ([protocol, ref_images_dir](const crow::request& req) {
         auto body = parse_body(req);
         if (!body || !body->contains("reference"))
             return crow::response(400, R"({"error":"Need 'reference' image path"})");
 
-        // Sandbox reference path to current working directory
+        // Resolve relative paths against ref_images dir
         auto ref_path = (*body)["reference"].get<std::string>();
-        auto base_dir = std::filesystem::current_path().string() + "/";
+        if (!ref_path.empty() && ref_path[0] != '/') {
+            ref_path = ref_images_dir + "/" + ref_path;
+        }
+        // Sandbox: allow paths under cwd or the configured ref_images dir
         auto canonical = std::filesystem::weakly_canonical(ref_path).string();
-        if (canonical.rfind(base_dir, 0) != 0)
-            return crow::response(403, R"({"error":"Reference path outside working directory"})");
+        auto cwd_prefix = std::filesystem::current_path().string() + "/";
+        auto ref_prefix = std::filesystem::weakly_canonical(ref_images_dir).string() + "/";
+        if (canonical.rfind(cwd_prefix, 0) != 0 && canonical.rfind(ref_prefix, 0) != 0)
+            return crow::response(403, R"({"error":"Reference path outside allowed directories"})");
 
         return json_route([&]() -> nlohmann::json {
             auto actual = protocol->screenshot();
@@ -416,6 +424,46 @@ void register_api_routes(CrowApp& app,
     ([protocol]() {
         return json_route([&]() -> nlohmann::json {
             return {{"version", protocol->ping()}};
+        });
+    });
+
+    // Find widget by name (for Python client)
+    CROW_ROUTE(app, "/api/find")
+    ([protocol](const crow::request& req) {
+        auto name = req.url_params.get("name");
+        if (!name)
+            return crow::response(400, R"({"error":"Need 'name' parameter"})");
+        return json_route([&, name]() -> nlohmann::json {
+            auto widget = protocol->find(name);
+            if (!widget) return {{"found", false}};
+            return {{"found", true},
+                    {"name", widget->name}, {"type", widget->type},
+                    {"auto_path", widget->auto_path}, {"text", widget->text},
+                    {"x", widget->x}, {"y", widget->y},
+                    {"width", widget->width}, {"height", widget->height},
+                    {"visible", widget->visible}, {"clickable", widget->clickable}};
+        });
+    });
+
+    // All widgets flattened (for Python client)
+    CROW_ROUTE(app, "/api/widgets")
+    ([protocol, tree]() {
+        return json_route([&]() -> nlohmann::json {
+            auto tree_json = protocol->get_tree_cached();
+            std::lock_guard lock(tree->mutex);
+            tree->update(tree_json);
+            auto widgets = tree->flatten();
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto* w : widgets) {
+                arr.push_back({
+                    {"name", w->name}, {"type", w->type},
+                    {"auto_path", w->auto_path}, {"text", w->text},
+                    {"x", w->x}, {"y", w->y},
+                    {"width", w->width}, {"height", w->height},
+                    {"visible", w->visible}, {"clickable", w->clickable}
+                });
+            }
+            return arr;
         });
     });
 

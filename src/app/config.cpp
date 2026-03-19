@@ -2,15 +2,28 @@
 
 #include <filesystem>
 
-#ifdef __linux__
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <unistd.h>
 #include <climits>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #endif
 
 namespace lvv {
 
 static std::string exe_dir() {
-#ifdef __linux__
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+    if (len > 0 && len < sizeof(buf)) {
+        return std::filesystem::path(buf).parent_path().string();
+    }
+#elif defined(__linux__)
     char buf[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (len > 0) {
@@ -18,7 +31,6 @@ static std::string exe_dir() {
         return std::filesystem::path(buf).parent_path().string();
     }
 #endif
-    // Fallback: current working directory
     return std::filesystem::current_path().string();
 }
 
@@ -41,6 +53,64 @@ std::string default_static_dir() {
 
     // Last resort: relative to cwd
     return "web/dist";
+}
+
+std::string find_lvv_python_dir() {
+    auto dir = exe_dir();
+
+    // In-tree build: <project>/build/lvv -> <project>/python
+    auto in_tree = std::filesystem::path(dir).parent_path() / "python";
+    if (std::filesystem::exists(in_tree / "lvv.py")) {
+        return in_tree.string();
+    }
+
+    // Installed: <prefix>/bin/lvv -> <prefix>/share/lvv/python
+    auto installed = std::filesystem::path(dir).parent_path() / "share" / "lvv" / "python";
+    if (std::filesystem::exists(installed / "lvv.py")) {
+        return installed.string();
+    }
+
+    // Fallback: relative to cwd
+    if (std::filesystem::exists("python/lvv.py")) {
+        return std::filesystem::absolute("python").string();
+    }
+
+    return {};
+}
+
+int find_free_port() {
+#ifdef _WIN32
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) return 0;
+#else
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return 0;
+#endif
+
+    struct sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+
+    if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+#ifdef _WIN32
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+        return 0;
+    }
+
+    socklen_t len = sizeof(addr);
+    getsockname(sock, (struct sockaddr*)&addr, &len);
+    int port = ntohs(addr.sin_port);
+
+#ifdef _WIN32
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+    return port;
 }
 
 } // namespace lvv

@@ -49,6 +49,10 @@ int main(int argc, char** argv) {
         ->default_val(0.1);
     run_cmd->add_option("--timeout", config.timeout, "Per-test timeout (seconds)")
         ->default_val(30.0);
+    run_cmd->add_flag("--python", config.use_system_python,
+                      "Use system Python instead of embedded PocketPy");
+    run_cmd->add_option("--python-exe", config.python_exe,
+                        "Python executable (default: python3 on Linux, python on Windows)");
     // --- serve ---
     auto* serve_cmd = cli.add_subcommand("serve", "Start web UI server");
     serve_cmd->add_option("--web-port", config.web_port, "Web server port")

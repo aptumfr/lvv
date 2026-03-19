@@ -18,7 +18,8 @@ class WebServer {
 public:
     WebServer(Protocol* protocol, WidgetTree* tree,
               ScriptEngine* script_engine, TestRunner* test_runner,
-              const std::string& static_dir = "web/dist");
+              const std::string& static_dir = "web/dist",
+              const std::string& ref_images_dir = "ref_images");
     ~WebServer();
 
     void start(int port = 8080, bool async = true);

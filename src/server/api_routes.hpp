@@ -18,6 +18,7 @@ void register_api_routes(CrowApp& app,
                          WidgetTree* tree,
                          WSHandler* ws,
                          ScriptEngine* script_engine,
-                         TestRunner* test_runner);
+                         TestRunner* test_runner,
+                         const std::string& ref_images_dir = "ref_images");
 
 } // namespace lvv

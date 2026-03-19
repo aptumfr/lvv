@@ -8,6 +8,12 @@ namespace lvv {
 /// Resolve the default static directory relative to the executable
 std::string default_static_dir();
 
+/// Find the directory containing the shipped lvv.py module
+std::string find_lvv_python_dir();
+
+/// Find a free TCP port on localhost
+int find_free_port();
+
 struct AppConfig {
     // Target connection
     std::string target_host = "localhost";
@@ -28,6 +34,8 @@ struct AppConfig {
     double diff_threshold = 0.1;
     double timeout = 30.0;
     bool verbose = false;
+    bool use_system_python = false;
+    std::string python_exe;  // empty = auto-detect
 };
 
 } // namespace lvv

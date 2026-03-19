@@ -38,7 +38,8 @@ static std::string mime_type(const std::string& path) {
 
 WebServer::WebServer(Protocol* protocol, WidgetTree* tree,
                      ScriptEngine* script_engine, TestRunner* test_runner,
-                     const std::string& static_dir)
+                     const std::string& static_dir,
+                     const std::string& ref_images_dir)
     : static_dir_(static_dir)
 {
     // CORS: allow all origins (needed for Vite dev server)
@@ -50,7 +51,7 @@ WebServer::WebServer(Protocol* protocol, WidgetTree* tree,
 
     // Register REST API routes
     register_api_routes(app_, protocol, tree, &ws_handler_,
-                        script_engine, test_runner);
+                        script_engine, test_runner, ref_images_dir);
 
     // Register WebSocket handler
     ws_handler_.setup(app_, protocol);

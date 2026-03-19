@@ -149,6 +149,12 @@ lvv run --output results.xml tests/
 
 # Custom settings
 lvv run --timeout 60 --threshold 0.5 --ref-images my_refs/ tests/
+
+# Use system Python instead of embedded PocketPy
+lvv run --python tests/
+
+# Specify a Python executable
+lvv run --python --python-exe python3.12 tests/
 ```
 
 | Option | Default | Description |
@@ -157,6 +163,14 @@ lvv run --timeout 60 --threshold 0.5 --ref-images my_refs/ tests/
 | `--ref-images DIR` | `ref_images` | Directory for visual regression reference images |
 | `--threshold PCT` | `0.1` | Visual diff threshold (0-100%) |
 | `--timeout SECS` | `30` | Per-test timeout in seconds |
+| `--python` | off | Use system Python instead of embedded PocketPy |
+| `--python-exe EXE` | auto | Python executable (`python3` on Linux, `python` on Windows) |
+
+By default, tests run in the embedded PocketPy interpreter (no dependencies needed).
+With `--python`, lvv starts an internal HTTP server and runs each test as a subprocess.
+The same test scripts work with both modes — the shipped `python/lvv.py` module provides
+the same API over HTTP. Using `--python` gives access to the full Python ecosystem
+(pytest, pip packages, debuggers).
 
 Test scripts use the `lvv` Python module. See [docs/scripting-api.md](docs/scripting-api.md) for the full API reference.
 

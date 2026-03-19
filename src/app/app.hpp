@@ -33,6 +33,9 @@ public:
     /// One-shot: take screenshot
     int screenshot(const AppConfig& config, const std::string& output);
 
+    /// Run tests using system Python
+    int run_tests_python(const AppConfig& config);
+
 private:
     bool connect(const AppConfig& config);
 
