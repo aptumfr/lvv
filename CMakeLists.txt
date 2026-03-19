@@ -31,6 +31,7 @@ set(LVV_SOURCES
     src/core/screen_capture.cpp
     src/core/visual_regression.cpp
     src/core/test_runner.cpp
+    src/core/process_runner.cpp
     src/scripting/script_engine.cpp
     src/scripting/lvv_module.cpp
     src/server/web_server.cpp
