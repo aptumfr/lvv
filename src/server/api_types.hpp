@@ -1,7 +1,9 @@
 #pragma once
 
 #include "protocol/commands.hpp"
+#include "core/visual_regression.hpp"
 #include <json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,5 +62,96 @@ inline nlohmann::json widgets_to_json(const std::vector<const WidgetInfo*>& widg
     }
     return arr;
 }
+
+// ---- Request parsing helpers ----
+
+/// Parse {x, y} from JSON body. Returns nullopt if missing or wrong type.
+struct CoordsRequest {
+    int x = 0, y = 0;
+
+    static std::optional<CoordsRequest> parse(const nlohmann::json& body) {
+        try {
+            if (!body.contains("x") || !body.contains("y")) return std::nullopt;
+            return CoordsRequest{body["x"].get<int>(), body["y"].get<int>()};
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// Parse {name} from JSON body.
+struct NameRequest {
+    std::string name;
+
+    static std::optional<NameRequest> parse(const nlohmann::json& body) {
+        try {
+            if (!body.contains("name")) return std::nullopt;
+            return NameRequest{body["name"].get<std::string>()};
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// Parse {text} from JSON body.
+struct TextRequest {
+    std::string text;
+
+    static std::optional<TextRequest> parse(const nlohmann::json& body) {
+        try {
+            if (!body.contains("text")) return std::nullopt;
+            return TextRequest{body["text"].get<std::string>()};
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// Parse {key} from JSON body.
+struct KeyRequest {
+    std::string key;
+
+    static std::optional<KeyRequest> parse(const nlohmann::json& body) {
+        try {
+            if (!body.contains("key")) return std::nullopt;
+            return KeyRequest{body["key"].get<std::string>()};
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// Parse {x, y, x_end, y_end, duration, steps} from JSON body.
+struct GestureRequest {
+    int x = 0, y = 0, x_end = 0, y_end = 0;
+    int duration = 300, steps = 10;
+
+    static std::optional<GestureRequest> parse(const nlohmann::json& body) {
+        try {
+            return GestureRequest{
+                body.value("x", 0), body.value("y", 0),
+                body.value("x_end", 0), body.value("y_end", 0),
+                body.value("duration", 300), body.value("steps", 10)};
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// Parse {reference, threshold, color_threshold, ignore_regions} from JSON body.
+struct CompareRequest {
+    std::string reference;
+    double threshold = 0.1;
+    double color_threshold = 10.0;
+    std::vector<IgnoreRegion> ignore_regions;
+
+    static std::optional<CompareRequest> parse(const nlohmann::json& body) {
+        try {
+            if (!body.contains("reference")) return std::nullopt;
+            CompareRequest req;
+            req.reference = body["reference"].get<std::string>();
+            req.threshold = body.value("threshold", 0.1);
+            req.color_threshold = body.value("color_threshold", 10.0);
+            if (body.contains("ignore_regions")) {
+                for (const auto& r : body["ignore_regions"]) {
+                    req.ignore_regions.push_back({
+                        r.value("x", 0), r.value("y", 0),
+                        r.value("width", 0), r.value("height", 0)});
+                }
+            }
+            return req;
+        } catch (...) { return std::nullopt; }
+    }
+};
 
 } // namespace lvv

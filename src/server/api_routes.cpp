@@ -1,4 +1,5 @@
 #include "api_routes.hpp"
+#include "api_types.hpp"
 #include "ws_handler.hpp"
 #include "protocol/protocol.hpp"
 #include "core/widget_tree.hpp"
@@ -108,13 +109,13 @@ void register_api_routes(CrowApp& app,
         auto body = parse_body(req);
         if (!body) return crow::response(400, "Invalid JSON");
 
-        if (body->contains("name")) {
-            return json_route([&]() -> nlohmann::json {
-                return {{"success", protocol->click((*body)["name"].get<std::string>())}};
+        if (auto n = NameRequest::parse(*body)) {
+            return json_route([&, n]() -> nlohmann::json {
+                return {{"success", protocol->click(n->name)}};
             });
-        } else if (body->contains("x") && body->contains("y")) {
-            return json_route([&]() -> nlohmann::json {
-                return {{"success", protocol->click_at((*body)["x"].get<int>(), (*body)["y"].get<int>())}};
+        } else if (auto c = CoordsRequest::parse(*body)) {
+            return json_route([&, c]() -> nlohmann::json {
+                return {{"success", protocol->click_at(c->x, c->y)}};
             });
         }
         return crow::response(400, R"({"error":"Need 'name' or 'x','y'"})");
@@ -124,12 +125,11 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/press").methods("POST"_method)
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("x") || !body->contains("y"))
-            return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->press((*body)["x"].get<int>(),
-                                                (*body)["y"].get<int>())}};
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto c = CoordsRequest::parse(*body);
+        if (!c) return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
+        return json_route([&, c]() -> nlohmann::json {
+            return {{"success", protocol->press(c->x, c->y)}};
         });
     });
 
@@ -137,12 +137,11 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/move").methods("POST"_method)
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("x") || !body->contains("y"))
-            return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->move_to((*body)["x"].get<int>(),
-                                                  (*body)["y"].get<int>())}};
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto c = CoordsRequest::parse(*body);
+        if (!c) return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
+        return json_route([&, c]() -> nlohmann::json {
+            return {{"success", protocol->move_to(c->x, c->y)}};
         });
     });
 
@@ -158,11 +157,11 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/type").methods("POST"_method)
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("text"))
-            return crow::response(400, R"({"error":"Need 'text'"})");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->type_text((*body)["text"].get<std::string>())}};
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto t = TextRequest::parse(*body);
+        if (!t) return crow::response(400, R"({"error":"Need 'text'"})");
+        return json_route([&, t]() -> nlohmann::json {
+            return {{"success", protocol->type_text(t->text)}};
         });
     });
 
@@ -170,11 +169,11 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/key").methods("POST"_method)
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("key"))
-            return crow::response(400, R"({"error":"Need 'key'"})");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->key((*body)["key"].get<std::string>())}};
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto k = KeyRequest::parse(*body);
+        if (!k) return crow::response(400, R"({"error":"Need 'key'"})");
+        return json_route([&, k]() -> nlohmann::json {
+            return {{"success", protocol->key(k->key)}};
         });
     });
 
@@ -183,12 +182,10 @@ void register_api_routes(CrowApp& app,
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
         if (!body) return crow::response(400, "Invalid JSON");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->swipe(
-                body->value("x", 0), body->value("y", 0),
-                body->value("x_end", 0), body->value("y_end", 0),
-                body->value("duration", 300))}};
+        auto g = GestureRequest::parse(*body);
+        if (!g) return crow::response(400, R"({"error":"Invalid gesture parameters"})");
+        return json_route([&, g]() -> nlohmann::json {
+            return {{"success", protocol->swipe(g->x, g->y, g->x_end, g->y_end, g->duration)}};
         });
     });
 
@@ -260,37 +257,18 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/find-at").methods("POST"_method)
     ([protocol, tree](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("x") || !body->contains("y"))
-            return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto c = CoordsRequest::parse(*body);
+        if (!c) return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
 
-        return json_route([&]() -> nlohmann::json {
-            int x = (*body)["x"].get<int>();
-            int y = (*body)["y"].get<int>();
-
+        return json_route([&, c]() -> nlohmann::json {
             auto tree_json = protocol->get_tree_cached();
             std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
 
-            auto widget = tree->find_at(x, y);
+            auto widget = tree->find_at(c->x, c->y);
             if (!widget) return {{"found", false}};
-
-            nlohmann::json j;
-            j["found"] = true;
-            j["name"] = widget->name;
-            j["type"] = widget->type;
-            j["auto_path"] = widget->auto_path;
-            j["text"] = widget->text;
-            j["x"] = widget->x;
-            j["y"] = widget->y;
-            j["width"] = widget->width;
-            j["height"] = widget->height;
-            j["clickable"] = widget->clickable;
-
-            if (!widget->name.empty()) j["selector"] = widget->name;
-            else if (!widget->auto_path.empty()) j["selector"] = widget->auto_path;
-            else j["selector"] = nullptr;
-
-            return j;
+            return WidgetJson::from(*widget).to_find_json();
         });
     });
 
@@ -298,11 +276,12 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/visual/compare").methods("POST"_method)
     ([protocol, ref_images_dir](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("reference"))
-            return crow::response(400, R"({"error":"Need 'reference' image path"})");
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto cr = CompareRequest::parse(*body);
+        if (!cr) return crow::response(400, R"({"error":"Need 'reference' image path"})");
 
         // Resolve relative paths against ref_images dir
-        auto ref_path = (*body)["reference"].get<std::string>();
+        auto ref_path = cr->reference;
         if (!ref_path.empty() && ref_path[0] != '/') {
             ref_path = ref_images_dir + "/" + ref_path;
         }
@@ -313,7 +292,7 @@ void register_api_routes(CrowApp& app,
         if (canonical.rfind(cwd_prefix, 0) != 0 && canonical.rfind(ref_prefix, 0) != 0)
             return crow::response(403, R"({"error":"Reference path outside allowed directories"})");
 
-        return json_route([&]() -> nlohmann::json {
+        return json_route([&, cr, ref_path]() -> nlohmann::json {
             auto actual = protocol->screenshot();
             if (!actual.valid()) throw std::runtime_error("Failed to capture screenshot");
 
@@ -328,16 +307,9 @@ void register_api_routes(CrowApp& app,
             }
 
             CompareOptions opts;
-            opts.diff_threshold = body->value("threshold", 0.1);
-            opts.color_threshold = body->value("color_threshold", 10.0);
-            if (body->contains("ignore_regions")) {
-                for (const auto& r : (*body)["ignore_regions"]) {
-                    opts.ignore_regions.push_back({
-                        r.value("x", 0), r.value("y", 0),
-                        r.value("width", 0), r.value("height", 0)
-                    });
-                }
-            }
+            opts.diff_threshold = cr->threshold;
+            opts.color_threshold = cr->color_threshold;
+            opts.ignore_regions = cr->ignore_regions;
             auto diff = compare_images(reference, actual, opts);
 
             return {{"passed", diff.passed}, {"identical", diff.identical},
@@ -351,13 +323,14 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/long-press").methods("POST"_method)
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
-        if (!body || !body->contains("x") || !body->contains("y"))
-            return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->long_press(
-                (*body)["x"].get<int>(), (*body)["y"].get<int>(),
-                body->value("duration", 500))}};
+        if (!body) return crow::response(400, "Invalid JSON");
+        auto c = CoordsRequest::parse(*body);
+        if (!c) return crow::response(400, R"({"error":"Need 'x' and 'y'"})");
+        int duration;
+        try { duration = body->value("duration", 500); }
+        catch (...) { return crow::response(400, R"({"error":"Invalid 'duration'"})"); }
+        return json_route([&, c, duration]() -> nlohmann::json {
+            return {{"success", protocol->long_press(c->x, c->y, duration)}};
         });
     });
 
@@ -366,13 +339,10 @@ void register_api_routes(CrowApp& app,
     ([protocol](const crow::request& req) {
         auto body = parse_body(req);
         if (!body) return crow::response(400, "Invalid JSON");
-
-        return json_route([&]() -> nlohmann::json {
-            return {{"success", protocol->drag(
-                body->value("x", 0), body->value("y", 0),
-                body->value("x_end", 0), body->value("y_end", 0),
-                body->value("duration", 300),
-                body->value("steps", 10))}};
+        auto g = GestureRequest::parse(*body);
+        if (!g) return crow::response(400, R"({"error":"Invalid gesture parameters"})");
+        return json_route([&, g]() -> nlohmann::json {
+            return {{"success", protocol->drag(g->x, g->y, g->x_end, g->y_end, g->duration, g->steps)}};
         });
     });
 
@@ -398,26 +368,12 @@ void register_api_routes(CrowApp& app,
 
             if (find_all) {
                 auto widgets = tree->find_all_by_selector(sel);
-                nlohmann::json arr = nlohmann::json::array();
-                for (const auto& w : widgets) {
-                    arr.push_back({
-                        {"name", w.name}, {"type", w.type},
-                        {"auto_path", w.auto_path}, {"text", w.text},
-                        {"x", w.x}, {"y", w.y},
-                        {"width", w.width}, {"height", w.height},
-                        {"visible", w.visible}, {"clickable", w.clickable}
-                    });
-                }
+                auto arr = widgets_to_json(widgets);
                 return {{"found", !arr.empty()}, {"count", arr.size()}, {"widgets", arr}};
             } else {
                 auto widget = tree->find_by_selector(sel);
                 if (!widget) return nlohmann::json{{"found", false}};
-                return {{"found", true},
-                        {"name", widget->name}, {"type", widget->type},
-                        {"auto_path", widget->auto_path}, {"text", widget->text},
-                        {"x", widget->x}, {"y", widget->y},
-                        {"width", widget->width}, {"height", widget->height},
-                        {"visible", widget->visible}, {"clickable", widget->clickable}};
+                return WidgetJson::from(*widget).to_find_json();
             }
         });
     });
@@ -439,12 +395,7 @@ void register_api_routes(CrowApp& app,
         return json_route([&, name]() -> nlohmann::json {
             auto widget = protocol->find(name);
             if (!widget) return {{"found", false}};
-            return {{"found", true},
-                    {"name", widget->name}, {"type", widget->type},
-                    {"auto_path", widget->auto_path}, {"text", widget->text},
-                    {"x", widget->x}, {"y", widget->y},
-                    {"width", widget->width}, {"height", widget->height},
-                    {"visible", widget->visible}, {"clickable", widget->clickable}};
+            return WidgetJson::from(*widget).to_find_json();
         });
     });
 
@@ -455,18 +406,7 @@ void register_api_routes(CrowApp& app,
             auto tree_json = protocol->get_tree_cached();
             std::lock_guard lock(tree->mutex);
             tree->update(tree_json);
-            auto widgets = tree->flatten();
-            nlohmann::json arr = nlohmann::json::array();
-            for (const auto* w : widgets) {
-                arr.push_back({
-                    {"name", w->name}, {"type", w->type},
-                    {"auto_path", w->auto_path}, {"text", w->text},
-                    {"x", w->x}, {"y", w->y},
-                    {"width", w->width}, {"height", w->height},
-                    {"visible", w->visible}, {"clickable", w->clickable}
-                });
-            }
-            return arr;
+            return widgets_to_json(tree->flatten());
         });
     });
 
