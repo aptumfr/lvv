@@ -114,6 +114,10 @@ int App::run_tests(const AppConfig& config) {
     test_runner_ = std::make_unique<TestRunner>(*script_engine_);
     test_runner_->set_timeout(config.timeout);
     test_runner_->set_verbose(config.verbose);
+    if (!config.setup_script.empty()) {
+        test_runner_->set_setup_script(
+            std::filesystem::absolute(config.setup_script).string());
+    }
 
     // Collect test files
     std::vector<std::string> files;
@@ -290,7 +294,18 @@ int App::run_tests_python(const AppConfig& config) {
     suite.name = "lvv_tests";
     auto suite_start = std::chrono::steady_clock::now();
 
+    std::string setup_abs;
+    if (!config.setup_script.empty()) {
+        setup_abs = std::filesystem::absolute(config.setup_script).string();
+    }
+
     for (const auto& file : files) {
+        // Run setup script before each test for isolation
+        if (!setup_abs.empty()) {
+            auto setup_result = run_one_test_python(
+                setup_abs, python_exe, env, config.timeout);
+            // Setup failures are warnings, not test failures
+        }
         suite.tests.push_back(
             run_one_test_python(file, python_exe, env, config.timeout));
     }

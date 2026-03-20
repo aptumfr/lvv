@@ -16,6 +16,14 @@ TestResult TestRunner::run_file(const std::string& path) {
 
     engine_.set_timeout(timeout_seconds_);
 
+    // Run setup script before each test (for test isolation)
+    if (!setup_script_.empty()) {
+        auto [ok, setup_out] = engine_.run_file(setup_script_);
+        if (!ok && verbose_) {
+            LOG_WARNING(log::get(), "  Setup script failed for {}: {}", result.name, setup_out);
+        }
+    }
+
     auto start = std::chrono::steady_clock::now();
 
     auto [success, output] = engine_.run_file(path);

@@ -36,6 +36,7 @@ struct AppConfig {
     bool verbose = false;
     bool use_system_python = false;
     std::string python_exe;  // empty = auto-detect
+    std::string setup_script;  // run before each test (for test isolation)
 };
 
 } // namespace lvv

@@ -381,6 +381,7 @@ static bool py_lvv_get_metrics(int argc, py_StackRef argv) {
 static bool py_lvv_wait(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(1);
     int ms = py_toint(py_arg(0));
+
     // Sleep in small increments so cancellation is responsive
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -696,6 +697,28 @@ static bool py_lvv_find_at(int argc, py_StackRef argv) {
             j["clickable"] = widget->clickable;
             py_newstr(py_retval(), j.dump().c_str());
         }
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+static bool py_lvv_widget_coords(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    auto name = resolve_name(py_tostr(py_arg(0)));
+    if (!check_protocol()) return false;
+
+    try {
+        auto widget = g_protocol->find(name);
+        if (!widget) {
+            return py_exception(tp_RuntimeError, "Widget '%s' not found", name);
+        }
+        py_newtuple(py_retval(), 4);
+        py_TValue* data = py_tuple_data(py_retval());
+        py_newint(&data[0], widget->x);
+        py_newint(&data[1], widget->y);
+        py_newint(&data[2], widget->width);
+        py_newint(&data[3], widget->height);
         return true;
     } catch (const std::exception& e) {
         return py_exception(tp_RuntimeError, "%s", e.what());
@@ -1038,11 +1061,9 @@ static bool py_lvv_wait_until(int argc, py_StackRef argv) {
                     }
                     last_value = widget->text;
                 } else {
-                    // Use get_props for other properties
                     auto props = g_protocol->get_props(name, prop);
                     if (props.contains(prop)) {
                         std::string val = props[prop].dump();
-                        // Strip quotes for string values
                         if (val.size() >= 2 && val.front() == '"') {
                             val = val.substr(1, val.size() - 2);
                         }
@@ -1090,6 +1111,7 @@ void lvv_module_register() {
     py_bind(mod, "get_tree()", py_lvv_get_tree);
     py_bind(mod, "find(name)", py_lvv_find);
     py_bind(mod, "find_at(x, y)", py_lvv_find_at);
+    py_bind(mod, "widget_coords(name)", py_lvv_widget_coords);
     py_bind(mod, "get_all_widgets()", py_lvv_get_all_widgets);
     py_bind(mod, "get_props(name)", py_lvv_get_props);
     py_bind(mod, "screen_info()", py_lvv_screen_info);

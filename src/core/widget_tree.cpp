@@ -197,10 +197,20 @@ void WidgetTree::find_all_selector_recursive(
 
 std::optional<WidgetInfo> WidgetTree::find_at_recursive(
     const WidgetInfo& node, int x, int y) {
-    // Deepest matching child wins
+    // Deepest matching child wins, but prefer clickable widgets over labels
     for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
         auto result = find_at_recursive(*it, x, y);
-        if (result) return result;
+        if (result) {
+            // If the deepest hit is a non-clickable leaf (e.g. label inside button),
+            // and the current node is clickable, prefer the clickable parent
+            if (!result->clickable && node.clickable &&
+                x >= node.x && x < node.x + node.width &&
+                y >= node.y && y < node.y + node.height &&
+                node.visible) {
+                return node;
+            }
+            return result;
+        }
     }
     if (x >= node.x && x < node.x + node.width &&
         y >= node.y && y < node.y + node.height &&

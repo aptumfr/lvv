@@ -23,6 +23,7 @@ export interface FindAtResult {
   y?: number;
   width?: number;
   height?: number;
+  clickable?: boolean;
 }
 
 export interface VisualDiffResult {
@@ -53,6 +54,8 @@ export const api = {
     request<{ success: boolean }>('/api/swipe', { method: 'POST', body: JSON.stringify({ x, y, x_end, y_end, duration }) }),
   widget: (name: string) => request<any>(`/api/widget/${encodeURIComponent(name)}`),
   screenInfo: () => request<{ width: number; height: number; color_format: string }>('/api/screen-info'),
+  find: (name: string) => request<FindAtResult>(`/api/find?name=${encodeURIComponent(name)}`),
+  widgets: () => request<Array<{name: string; type: string; auto_path: string; visible: boolean; clickable: boolean}>>('/api/widgets'),
   findAt: (x: number, y: number) => request<FindAtResult>('/api/find-at', { method: 'POST', body: JSON.stringify({ x, y }) }),
   runCode: (code: string) => request<{ success: boolean; output: string }>('/api/test/run', { method: 'POST', body: JSON.stringify({ code }) }),
   runFiles: (files: string[]) => request<any>('/api/test/run', { method: 'POST', body: JSON.stringify({ files }) }),

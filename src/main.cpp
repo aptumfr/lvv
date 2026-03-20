@@ -49,6 +49,8 @@ int main(int argc, char** argv) {
         ->default_val(0.1);
     run_cmd->add_option("--timeout", config.timeout, "Per-test timeout (seconds)")
         ->default_val(30.0);
+    run_cmd->add_option("--setup", config.setup_script,
+                        "Script to run before each test (for test isolation)");
     run_cmd->add_flag("--python", config.use_system_python,
                       "Use system Python instead of embedded PocketPy");
     run_cmd->add_option("--python-exe", config.python_exe,

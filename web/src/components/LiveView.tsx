@@ -18,7 +18,13 @@ export function LiveView() {
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
   const dragStartTime = useRef<number>(0);
+  const lastActionTime = useRef<number>(0);
   const hoverThrottle = useRef<number>(0);
+
+  // Reset action timer when recording starts
+  useEffect(() => {
+    if (recording) lastActionTime.current = 0;
+  }, [recording]);
 
   // Draw frames — ImageBitmap already decoded off main thread, sequenced in useWebSocket
   useEffect(() => {
@@ -105,11 +111,33 @@ export function LiveView() {
     const elapsed = Date.now() - dragStartTime.current;
 
     if (recording) {
-      addRecordedStep('lvv.wait(200)');
+      // Record real elapsed time since last action (minimum 100ms)
+      const now = Date.now();
+      if (lastActionTime.current > 0) {
+        const gap = now - lastActionTime.current;
+        const waitMs = Math.max(Math.round(gap / 100) * 100, 100);
+        addRecordedStep(`lvv.wait(${waitMs})`);
+      }
+      lastActionTime.current = now;
 
       if (wasDrag) {
-        // Use drag for slow movements (>400ms), swipe for quick ones
         const duration = Math.max(Math.round(elapsed), 200);
+        // Try to find the widget at drag start for relative coordinates
+        try {
+          const dragWidget = await api.findAt(start.x, start.y);
+          if (dragWidget.found && dragWidget.selector && dragWidget.name &&
+              (dragWidget.type === 'slider' || dragWidget.type === 'obj')) {
+            const fn = elapsed > 400 ? 'drag' : 'swipe';
+            const relX1 = start.x - (dragWidget.x || 0);
+            const relY1 = start.y - (dragWidget.y || 0);
+            const relX2 = coords.x - (dragWidget.x || 0);
+            const relY2 = coords.y - (dragWidget.y || 0);
+            addRecordedStep(`x, y, w, h = lvv.widget_coords("${dragWidget.selector}")`);
+            addRecordedStep(`lvv.${fn}(x+${relX1}, y+${relY1}, x+${relX2}, y+${relY2}, ${duration})`);
+            return;
+          }
+        } catch {}
+        // Fallback: absolute coordinates
         if (elapsed > 400) {
           addRecordedStep(`lvv.drag(${start.x}, ${start.y}, ${coords.x}, ${coords.y}, ${duration})`);
         } else {
@@ -117,6 +145,15 @@ export function LiveView() {
         }
         return;
       }
+
+      // Snapshot visible widgets before click to detect screen changes
+      let beforeVisible: Set<string> | null = null;
+      try {
+        const widgets = await api.widgets();
+        beforeVisible = new Set(
+          widgets.filter(w => w.visible && w.name).map(w => w.name)
+        );
+      } catch {}
 
       try {
         const result = await api.findAt(coords.x, coords.y);
@@ -136,6 +173,26 @@ export function LiveView() {
               auto_path: result.auto_path || '',
               text: result.text || '',
             });
+          }
+
+          // After clicking a button, check if a new screen/dialog appeared
+          if (result.type === 'button' || result.clickable) {
+            try {
+              // Brief wait for LVGL to process the click
+              await new Promise(r => setTimeout(r, 300));
+              const afterWidgets = await api.widgets();
+              const afterVisible = afterWidgets.filter(w => w.visible && w.name);
+
+              // Find newly visible named widgets (screens, dialogs)
+              for (const w of afterVisible) {
+                if (beforeVisible && !beforeVisible.has(w.name) && w.name) {
+                  // A new named widget appeared — emit wait_for
+                  addRecordedStep(`lvv.wait_for("${w.name}", 2000)`);
+                  lastActionTime.current = Date.now(); // reset timer after the 300ms probe
+                  break;
+                }
+              }
+            } catch {}
           }
         } else {
           addRecordedStep(`lvv.click_at(${coords.x}, ${coords.y})`);

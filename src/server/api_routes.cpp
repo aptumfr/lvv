@@ -284,6 +284,7 @@ void register_api_routes(CrowApp& app,
             j["y"] = widget->y;
             j["width"] = widget->width;
             j["height"] = widget->height;
+            j["clickable"] = widget->clickable;
 
             if (!widget->name.empty()) j["selector"] = widget->name;
             else if (!widget->auto_path.empty()) j["selector"] = widget->auto_path;

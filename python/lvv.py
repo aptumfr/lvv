@@ -161,6 +161,15 @@ def get_props(name):
     return json.dumps(_get(f"/api/widget/{_resolve(name)}"))
 
 
+def widget_coords(name):
+    """Return (x, y, width, height) for a widget, or raise if not found."""
+    name = _resolve(name)
+    resp = _get(f"/api/find?name={name}")
+    if not resp.get("found", False):
+        raise RuntimeError(f"Widget '{name}' not found")
+    return (resp["x"], resp["y"], resp["width"], resp["height"])
+
+
 def get_all_widgets():
     return json.dumps(_get("/api/widgets"))
 

@@ -17,13 +17,24 @@ export function TestEditor() {
 
   const handleRun = async () => {
     if (!connected) return;
+
+    // If there are recorded steps not yet applied, run those instead
+    let codeToRun = testCode;
+    if (recordedSteps.length > 0) {
+      codeToRun = 'import lvv\n\n' + recordedSteps.join('\n') + '\n';
+    }
+
     setRunning(true);
     setTestOutput('Running...\n');
     try {
-      const res = await api.runCode(testCode);
-      setTestOutput(
-        `${res.success ? 'PASSED' : 'FAILED'}\n\n${res.output}`
-      );
+      const res = await api.runCode(codeToRun);
+      const hasAssertions = /assert|screenshot_compare|wait_for|wait_until/.test(codeToRun);
+      let status = res.success ? 'PASSED' : 'FAILED';
+      let warning = '';
+      if (res.success && !hasAssertions) {
+        warning = '(no assertions — script completed without verifying anything)\n\n';
+      }
+      setTestOutput(`${status}\n${warning}${res.output}`);
     } catch (e: any) {
       setTestOutput(`Error: ${e.message}`);
     }
@@ -31,9 +42,7 @@ export function TestEditor() {
   };
 
   const toggleRecording = () => {
-    if (!recording) {
-      clearRecordedSteps();
-    }
+    // Don't clear steps when resuming — allows multi-screen recording
     setRecording(!recording);
   };
 
@@ -91,7 +100,7 @@ export function TestEditor() {
   const lineCount = Math.max(testCode.split('\n').length, 1);
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
 
-  const showRecordingPanel = recording;
+  const showRecordingPanel = recording || recordedSteps.length > 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -198,10 +207,13 @@ export function TestEditor() {
             placeholder="import lvv&#10;&#10;lvv.click('button_name')&#10;lvv.assert_visible('widget')"
           />
         </div>
-        {/* Bottom panel: recorded steps or output */}
-        <div className="h-32 overflow-auto bg-slate-950 p-2">
-          {showRecordingPanel ? (
+        {/* Bottom panel: recorded steps and/or output */}
+        {showRecordingPanel && (
+          <div className="max-h-32 overflow-auto bg-slate-950 p-2 border-b border-slate-700">
             <div className="font-mono text-xs">
+              <div className="text-slate-500 text-[10px] mb-1">
+                Recorded ({recordedSteps.length} steps)
+              </div>
               {recordedSteps.map((step, i) => (
                 <div key={i} className={
                   step.startsWith('lvv.wait') ? 'text-slate-500' :
@@ -219,11 +231,12 @@ export function TestEditor() {
                 </div>
               )}
             </div>
-          ) : (
-            <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono">
-              {testOutput || 'Output will appear here...'}
-            </pre>
-          )}
+          </div>
+        )}
+        <div className="h-24 overflow-auto bg-slate-950 p-2">
+          <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono">
+            {testOutput || 'Output will appear here...'}
+          </pre>
         </div>
       </div>
     </div>

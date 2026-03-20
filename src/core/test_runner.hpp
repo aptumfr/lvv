@@ -21,11 +21,13 @@ public:
 
     void set_timeout(double seconds) { timeout_seconds_ = seconds; }
     void set_verbose(bool v) { verbose_ = v; }
+    void set_setup_script(const std::string& path) { setup_script_ = path; }
 
 private:
     ScriptEngine& engine_;
     double timeout_seconds_ = 30.0;
     bool verbose_ = false;
+    std::string setup_script_;
 };
 
 } // namespace lvv
