@@ -38,7 +38,9 @@ static crow::response json_ok(nlohmann::json j) {
 }
 
 static crow::response json_err(int code, const std::string& msg) {
-    return crow::response(code, nlohmann::json{{"error", msg}}.dump());
+    crow::response resp(code, nlohmann::json{{"error", msg}}.dump());
+    resp.set_header("Content-Type", "application/json");
+    return resp;
 }
 
 // Parse JSON body, return nullopt on failure
