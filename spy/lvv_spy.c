@@ -436,15 +436,40 @@ static lv_obj_t* find_widget(const char* selector) {
 /* Spy-owned virtual input device. LVGL's timer handler polls this via the
  * read callback, which produces proper press/move/release sequences through
  * LVGL's normal input pipeline (scrolling, gestures, long-press, etc.). */
+#define LVV_INPUT_QUEUE_SIZE 64
+
 static lv_indev_t* s_spy_indev = NULL;
 static lv_indev_state_t s_indev_state = LV_INDEV_STATE_RELEASED;
 static lv_point_t s_indev_point = {0, 0};
+static lv_indev_state_t s_pending_indev_state = LV_INDEV_STATE_RELEASED;
+static lv_point_t s_pending_indev_point = {0, 0};
+
+typedef struct {
+    lv_indev_state_t state;
+    lv_point_t point;
+} lvv_input_sample_t;
+
+static lvv_input_sample_t s_input_queue[LVV_INPUT_QUEUE_SIZE];
+static uint16_t s_input_queue_head = 0;
+static uint16_t s_input_queue_tail = 0;
+static uint16_t s_input_queue_count = 0;
 
 static void spy_indev_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     (void)indev;
+
+    if (s_input_queue_count > 0) {
+        lvv_input_sample_t sample = s_input_queue[s_input_queue_head];
+        s_input_queue_head = (uint16_t)((s_input_queue_head + 1) % LVV_INPUT_QUEUE_SIZE);
+        s_input_queue_count--;
+        s_indev_point = sample.point;
+        s_indev_state = sample.state;
+        data->continue_reading = (s_input_queue_count > 0);
+    } else {
+        data->continue_reading = false;
+    }
+
     data->point = s_indev_point;
     data->state = s_indev_state;
-    data->continue_reading = false;
 }
 
 static void ensure_spy_indev(void) {
@@ -455,41 +480,53 @@ static void ensure_spy_indev(void) {
     lv_indev_set_display(s_spy_indev, lv_display_get_default());
 }
 
-/* Force the spy indev timer to fire on the next lv_timer_handler() call,
- * regardless of its period. Without this, the main loop's lv_timer_handler()
- * already ran the indev timer moments ago, so our call would skip it. */
-static void force_indev_process(void) {
+static bool queue_input_sample(lv_indev_state_t state, int x, int y) {
+    if (s_input_queue_count >= LVV_INPUT_QUEUE_SIZE) return false;
+
+    s_input_queue[s_input_queue_tail].state = state;
+    s_input_queue[s_input_queue_tail].point.x = (int32_t)x;
+    s_input_queue[s_input_queue_tail].point.y = (int32_t)y;
+    s_input_queue_tail = (uint16_t)((s_input_queue_tail + 1) % LVV_INPUT_QUEUE_SIZE);
+    s_input_queue_count++;
+    s_pending_indev_state = state;
+    s_pending_indev_point.x = (int32_t)x;
+    s_pending_indev_point.y = (int32_t)y;
+    return true;
+}
+
+static void poke_spy_indev(void) {
     if (!s_spy_indev) return;
     lv_timer_t* t = lv_indev_get_read_timer(s_spy_indev);
     if (t) lv_timer_ready(t);
-    lv_timer_handler();
 }
 
-/* Press at point and force LVGL to process it */
+/* Queue a press for LVGL's normal input pipeline instead of running
+ * lv_timer_handler() recursively from the spy context. */
 static void inject_press(int x, int y) {
     ensure_spy_indev();
-    s_indev_point.x = (int32_t)x;
-    s_indev_point.y = (int32_t)y;
-    s_indev_state = LV_INDEV_STATE_PRESSED;
-    force_indev_process();
+    if (queue_input_sample(LV_INDEV_STATE_PRESSED, x, y)) {
+        poke_spy_indev();
+    }
 }
 
-/* Move to point while pressed */
+/* Queue move samples using the pending pointer state so drag sequences stay
+ * pressed even if the previous sample has not been consumed yet. */
 static void inject_move(int x, int y) {
     ensure_spy_indev();
-    s_indev_point.x = (int32_t)x;
-    s_indev_point.y = (int32_t)y;
-    force_indev_process();
+    if (queue_input_sample(s_pending_indev_state, x, y)) {
+        poke_spy_indev();
+    }
 }
 
-/* Release and force LVGL to process */
 static void inject_release(void) {
     ensure_spy_indev();
-    s_indev_state = LV_INDEV_STATE_RELEASED;
-    force_indev_process();
+    if (queue_input_sample(LV_INDEV_STATE_RELEASED,
+                           s_pending_indev_point.x,
+                           s_pending_indev_point.y)) {
+        poke_spy_indev();
+    }
 }
 
-/* Full click: press, then release after forcing the indev timer each time */
 static void inject_click(int x, int y) {
     inject_press(x, y);
     inject_release();
@@ -965,6 +1002,16 @@ static void read_client(void) {
 bool lvv_spy_init(uint16_t port) {
     /* Save the app's existing log callback so we can restore it later */
     s_prev_log_cb = LV_GLOBAL_DEFAULT()->custom_log_print_cb;
+
+    s_input_queue_head = 0;
+    s_input_queue_tail = 0;
+    s_input_queue_count = 0;
+    s_indev_state = LV_INDEV_STATE_RELEASED;
+    s_indev_point.x = 0;
+    s_indev_point.y = 0;
+    s_pending_indev_state = LV_INDEV_STATE_RELEASED;
+    s_pending_indev_point.x = 0;
+    s_pending_indev_point.y = 0;
 
     s_resp_buf = (char*)lv_malloc(LVV_MAX_RESP_LEN);
     if (!s_resp_buf) {
