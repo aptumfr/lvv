@@ -7,6 +7,7 @@
 #include "core/test_runner.hpp"
 #include "core/test_result.hpp"
 #include "core/junit_xml.hpp"
+#include "core/html_report.hpp"
 #include "core/process_runner.hpp"
 #include "scripting/script_engine.hpp"
 #include "scripting/lvv_module.hpp"
@@ -44,6 +45,92 @@ bool App::connect(const AppConfig& config) {
         return false;
     }
     return true;
+}
+
+int App::doctor(const AppConfig& config) {
+    int issues = 0;
+
+    auto check = [&](const char* label, bool ok, const std::string& detail = "") {
+        if (ok) {
+            LOG_INFO(log::get(), "  [OK]   {}{}", label, detail.empty() ? "" : " — " + detail);
+        } else {
+            LOG_ERROR(log::get(), "  [FAIL] {}{}", label, detail.empty() ? "" : " — " + detail);
+            issues++;
+        }
+    };
+
+    LOG_INFO(log::get(), "LVV Doctor — checking setup...");
+    LOG_INFO(log::get(), "");
+
+    // Target connectivity
+    bool connected = false;
+    std::string spy_version;
+    try {
+        if (connect(config)) {
+            connected = true;
+            spy_version = protocol_->ping();
+        }
+    } catch (...) {}
+
+    if (!config.serial_device.empty()) {
+        check("Serial device", connected,
+              config.serial_device + " @ " + std::to_string(config.serial_baud));
+    } else {
+        check("Target connection", connected,
+              config.target_host + ":" + std::to_string(config.target_port));
+    }
+    check("Spy version", !spy_version.empty(), spy_version);
+
+    // Screen info
+    if (connected) {
+        try {
+            auto info = protocol_->get_screen_info();
+            check("Display", info.width > 0,
+                  std::to_string(info.width) + "x" + std::to_string(info.height)
+                  + " " + info.color_format);
+        } catch (...) {
+            check("Display", false, "failed to query");
+        }
+    }
+
+    // Reference images directory
+    auto ref_dir = std::filesystem::absolute(config.ref_images_dir);
+    check("Ref images dir", true, ref_dir.string()
+          + (std::filesystem::is_directory(ref_dir) ? " (exists)" : " (will be created)"));
+
+    // Python (for --python mode)
+    auto python_dir = find_lvv_python_dir();
+    check("lvv.py module", !python_dir.empty(),
+          python_dir.empty() ? "not found" : python_dir);
+
+    std::string python_exe;
+#ifdef _WIN32
+    python_exe = "python";
+#else
+    python_exe = "python3";
+#endif
+#ifdef _WIN32
+    bool python_ok = (std::system((python_exe + " --version > NUL 2>&1").c_str()) == 0);
+#else
+    bool python_ok = (std::system((python_exe + " --version > /dev/null 2>&1").c_str()) == 0);
+#endif
+    check("System Python", python_ok,
+          python_ok ? python_exe : python_exe + " not found in PATH");
+
+    // Web UI static files
+    auto static_dir = default_static_dir();
+    bool has_web = std::filesystem::is_directory(static_dir);
+    check("Web UI", has_web,
+          has_web ? static_dir : "not found (run npm build in web/)");
+
+    LOG_INFO(log::get(), "");
+    if (issues == 0) {
+        LOG_INFO(log::get(), "All checks passed.");
+    } else {
+        LOG_ERROR(log::get(), "{} issue(s) found.", issues);
+    }
+
+    return issues > 0 ? 1 : 0;
 }
 
 int App::ping(const AppConfig& config) {
@@ -99,6 +186,24 @@ int App::screenshot(const AppConfig& config, const std::string& output) {
     }
 }
 
+// Write test reports (JUnit XML and/or HTML) if output paths are configured
+static void write_reports(const TestSuiteResult& suite, const AppConfig& config) {
+    if (!config.junit_output.empty()) {
+        std::ofstream f(config.junit_output);
+        if (f.is_open()) {
+            f << generate_junit_xml(suite);
+            LOG_INFO(log::get(), "JUnit report: {}", config.junit_output);
+        }
+    }
+    if (!config.html_output.empty()) {
+        std::ofstream f(config.html_output);
+        if (f.is_open()) {
+            f << generate_html_report(suite);
+            LOG_INFO(log::get(), "HTML report: {}", config.html_output);
+        }
+    }
+}
+
 int App::run_tests(const AppConfig& config) {
     if (config.use_system_python) {
         return run_tests_python(config);
@@ -114,6 +219,7 @@ int App::run_tests(const AppConfig& config) {
     test_runner_ = std::make_unique<TestRunner>(*script_engine_);
     test_runner_->set_timeout(config.timeout);
     test_runner_->set_verbose(config.verbose);
+    test_runner_->set_fail_fast(config.fail_fast);
     if (!config.setup_script.empty()) {
         test_runner_->set_setup_script(
             std::filesystem::absolute(config.setup_script).string());
@@ -150,14 +256,7 @@ int App::run_tests(const AppConfig& config) {
              suite.total_duration_seconds);
 
     // Write JUnit XML
-    if (!config.junit_output.empty()) {
-        auto xml = generate_junit_xml(suite);
-        std::ofstream f(config.junit_output);
-        if (f.is_open()) {
-            f << xml;
-            LOG_INFO(log::get(), "JUnit report: {}", config.junit_output);
-        }
-    }
+    write_reports(suite, config);
 
     return suite.all_passed() ? 0 : 1;
 }
@@ -308,6 +407,9 @@ int App::run_tests_python(const AppConfig& config) {
         }
         suite.tests.push_back(
             run_one_test_python(file, python_exe, env, config.timeout));
+        if (config.fail_fast && suite.tests.back().status != TestStatus::Pass) {
+            break;
+        }
     }
 
     suite.total_duration_seconds = std::chrono::duration<double>(
@@ -317,14 +419,7 @@ int App::run_tests_python(const AppConfig& config) {
              suite.passed(), suite.failed(), suite.tests.size(),
              suite.total_duration_seconds);
 
-    if (!config.junit_output.empty()) {
-        auto xml = generate_junit_xml(suite);
-        std::ofstream f(config.junit_output);
-        if (f.is_open()) {
-            f << xml;
-            LOG_INFO(log::get(), "JUnit report: {}", config.junit_output);
-        }
-    }
+    write_reports(suite, config);
 
     web_server_->stop();
     return suite.all_passed() ? 0 : 1;

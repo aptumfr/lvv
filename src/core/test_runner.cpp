@@ -62,6 +62,9 @@ TestSuiteResult TestRunner::run_suite(const std::string& name,
 
     for (const auto& file : files) {
         suite.tests.push_back(run_file(file));
+        if (fail_fast_ && suite.tests.back().status != TestStatus::Pass) {
+            break;
+        }
     }
 
     auto end = std::chrono::steady_clock::now();

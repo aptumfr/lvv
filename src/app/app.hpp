@@ -24,6 +24,9 @@ public:
     /// Run tests headless
     int run_tests(const AppConfig& config);
 
+    /// Diagnostic: check setup and connectivity
+    int doctor(const AppConfig& config);
+
     /// One-shot: ping the target
     int ping(const AppConfig& config);
 

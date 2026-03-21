@@ -22,6 +22,9 @@ int main(int argc, char** argv) {
         ->default_val(115200);
     cli.add_flag("--verbose,-v", config.verbose, "Verbose output (debug logging)");
 
+    // --- doctor ---
+    auto* doctor_cmd = cli.add_subcommand("doctor", "Check setup and diagnose issues");
+
     // --- ping ---
     auto* ping_cmd = cli.add_subcommand("ping", "Ping the target");
 
@@ -41,6 +44,7 @@ int main(int argc, char** argv) {
     run_cmd->add_option("files", config.test_files, "Test files or directories")
         ->required();
     run_cmd->add_option("--output", config.junit_output, "JUnit XML output file");
+    run_cmd->add_option("--html", config.html_output, "HTML report output file");
     run_cmd->add_option("--ref-images", config.ref_images_dir,
                         "Reference images directory")
         ->default_val("ref_images");
@@ -49,6 +53,8 @@ int main(int argc, char** argv) {
         ->default_val(0.1);
     run_cmd->add_option("--timeout", config.timeout, "Per-test timeout (seconds)")
         ->default_val(30.0);
+    run_cmd->add_flag("--fail-fast", config.fail_fast,
+                      "Stop on first test failure");
     run_cmd->add_option("--setup", config.setup_script,
                         "Script to run before each test (for test isolation)");
     run_cmd->add_flag("--python", config.use_system_python,
@@ -79,6 +85,9 @@ int main(int argc, char** argv) {
 
     lvv::App app;
 
+    if (doctor_cmd->parsed()) {
+        return app.doctor(config);
+    }
     if (ping_cmd->parsed()) {
         return app.ping(config);
     }

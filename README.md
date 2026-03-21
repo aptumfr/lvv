@@ -80,7 +80,19 @@ CMake variables can also be set directly: `cmake .. -DLVGL_DIR=/path/to/lvgl`.
 
 ## Usage
 
-LVV has five subcommands: `ping`, `tree`, `screenshot`, `run`, and `serve`.
+LVV has six subcommands: `doctor`, `ping`, `tree`, `screenshot`, `run`, and `serve`.
+
+### doctor
+
+Check setup and diagnose connectivity issues.
+
+```bash
+lvv doctor
+lvv --port 5556 doctor
+```
+
+Checks target connectivity, spy version, display resolution, reference images directory,
+Python availability, web UI files, and reports `[OK]` / `[FAIL]` for each.
 
 ### Global Options
 
@@ -144,8 +156,11 @@ lvv run tests/test_navigation.py tests/test_settings.py
 # Whole directory
 lvv run tests/
 
-# With JUnit XML output (for CI)
-lvv run --output results.xml tests/
+# With JUnit XML and HTML report output (for CI)
+lvv run --output results.xml --html report.html tests/
+
+# Stop on first failure
+lvv run --fail-fast tests/
 
 # Custom settings
 lvv run --timeout 60 --threshold 0.5 --ref-images my_refs/ tests/
@@ -160,9 +175,12 @@ lvv run --python --python-exe python3.12 tests/
 | Option | Default | Description |
 |---|---|---|
 | `--output FILE` | | JUnit XML output file |
+| `--html FILE` | | HTML report output file |
+| `--fail-fast` | off | Stop on first test failure |
 | `--ref-images DIR` | `ref_images` | Directory for visual regression reference images |
 | `--threshold PCT` | `0.1` | Visual diff threshold (0-100%) |
 | `--timeout SECS` | `30` | Per-test timeout in seconds |
+| `--setup FILE` | | Script to run before each test (for test isolation) |
 | `--python` | off | Use system Python instead of embedded PocketPy |
 | `--python-exe EXE` | auto | Python executable (`python3` on Linux, `python` on Windows) |
 

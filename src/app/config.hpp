@@ -30,11 +30,13 @@ struct AppConfig {
     // Test execution
     std::vector<std::string> test_files;
     std::string junit_output;
+    std::string html_output;
     std::string ref_images_dir = "ref_images";
     double diff_threshold = 0.1;
     double timeout = 30.0;
     bool verbose = false;
     bool use_system_python = false;
+    bool fail_fast = false;
     std::string python_exe;  // empty = auto-detect
     std::string setup_script;  // run before each test (for test isolation)
 };
