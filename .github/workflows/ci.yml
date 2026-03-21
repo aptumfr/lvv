@@ -26,7 +26,7 @@ jobs:
       # Check out all three repos as siblings (same layout as local dev)
       - uses: actions/checkout@v4
         with:
-          path: lv2
+          path: lvv
 
       - uses: actions/checkout@v4
         with:
@@ -43,7 +43,7 @@ jobs:
 
       - name: Build lvv
         run: |
-          cd lv2
+          cd lvv
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . -j$(nproc)
@@ -53,22 +53,22 @@ jobs:
           LVGL_DIR: ${{ github.workspace }}/lvgl
           LV_CPP_DIR: ${{ github.workspace }}/lv
         run: |
-          cd lv2/example
+          cd lvv/example
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . -j$(nproc) --target demo_headless
 
       - name: Run integration tests
         run: |
-          lv2/example/build/demo_headless &
+          lvv/example/build/demo_headless &
           for i in $(seq 1 20); do
-            lv2/build/lvv --port 5555 ping && break
+            lvv/build/lvv --port 5555 ping && break
             [ $i -eq 20 ] && { echo "Spy not ready"; exit 1; }
             sleep 0.5
           done
-          lv2/build/lvv --port 5555 run \
+          lvv/build/lvv --port 5555 run \
             --output results.xml \
-            lv2/tests/example_tests/
+            lvv/tests/example_tests/
 
       - name: Publish test results
         uses: dorny/test-reporter@v1

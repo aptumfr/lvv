@@ -1,9 +1,9 @@
 # Headless CI image for running LVV tests without a display
 #
 # The build context must include lvgl and lv repos as siblings.
-# From the parent directory containing lvgl/, lv/, and lv2/:
+# From the parent directory containing lvgl/, lv/, and lvv/:
 #
-#   docker build -f lv2/Dockerfile.ci -t lvv-ci .
+#   docker build -f lvv/Dockerfile.ci -t lvv-ci .
 #
 # Run tests:
 #   docker run --rm lvv-ci
@@ -22,17 +22,17 @@ WORKDIR /src
 # Copy all three repos (build context is the parent directory)
 COPY lvgl/ lvgl/
 COPY lv/   lv/
-COPY lv2/  lv2/
+COPY lvv/  lvv/
 
 # Build lvv (host tool)
-RUN cd lv2 && mkdir -p build && cd build \
+RUN cd lvv && mkdir -p build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release \
     && cmake --build . -j$(nproc)
 
 # Build headless demo (point to sibling repos via env vars)
 ENV LVGL_DIR=/src/lvgl
 ENV LV_CPP_DIR=/src/lv
-RUN cd lv2/example && mkdir -p build && cd build \
+RUN cd lvv/example && mkdir -p build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release \
     && cmake --build . -j$(nproc) --target demo_headless
 
@@ -43,9 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /src/lv2/build/lvv /usr/local/bin/lvv
-COPY --from=builder /src/lv2/example/build/demo_headless /usr/local/bin/demo_headless
-COPY --from=builder /src/lv2/tests /tests
+COPY --from=builder /src/lvv/build/lvv /usr/local/bin/lvv
+COPY --from=builder /src/lvv/example/build/demo_headless /usr/local/bin/demo_headless
+COPY --from=builder /src/lvv/tests /tests
 
 # Entrypoint: start headless demo in background, run tests, exit
 COPY <<'ENTRYPOINT' /entrypoint.sh

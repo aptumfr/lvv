@@ -327,10 +327,10 @@ int main() {
 
 Or compile an existing app with `-DLVV_HEADLESS` to switch display backends.
 
-**Docker** (run from the parent directory containing `lvgl/`, `lv/`, and `lv2/`):
+**Docker** (run from the parent directory containing `lvgl/`, `lv/`, and `lvv/`):
 
 ```bash
-docker build -f lv2/Dockerfile.ci -t lvv-ci .
+docker build -f lvv/Dockerfile.ci -t lvv-ci .
 docker run --rm lvv-ci
 ```
 
