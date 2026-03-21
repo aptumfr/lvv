@@ -4,15 +4,16 @@
  *
  * Single-file implementation. Listens on a TCP port, accepts one client,
  * processes newline-delimited JSON commands, returns JSON responses.
+ *
+ * Portable: uses only LVGL APIs for memory/string operations.
+ * The only libc dependency is <string.h> for strstr() and strtol().
+ * Networking is behind #ifdef LVV_USE_POSIX_SOCKETS (default on Linux/macOS/ESP-IDF).
  */
 
 #include "lvv_spy.h"
 
 #include <lvgl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
+#include <string.h>  /* strstr, strtol — universally available, even on bare-metal */
 
 /* LVGL private headers for strip-based rendering and log globals */
 #include "src/draw/lv_draw_private.h"
@@ -21,13 +22,31 @@
 #include "src/display/lv_display_private.h"
 #include "src/core/lv_global.h"
 
-/* POSIX networking */
+/* Transport: POSIX sockets on Linux/macOS/ESP-IDF.
+ * Auto-detected from platform defines. Define LVV_NO_POSIX_SOCKETS to force off,
+ * or LVV_USE_POSIX_SOCKETS=1 to force on for custom POSIX-compatible targets. */
+#ifndef LVV_USE_POSIX_SOCKETS
+#if defined(__linux__) || defined(__APPLE__) || defined(ESP_PLATFORM) || defined(__unix__)
+#define LVV_USE_POSIX_SOCKETS 1
+#else
+#define LVV_USE_POSIX_SOCKETS 0
+#endif
+#endif
+
+#ifdef LVV_NO_POSIX_SOCKETS
+#undef LVV_USE_POSIX_SOCKETS
+#define LVV_USE_POSIX_SOCKETS 0
+#endif
+
+#if LVV_USE_POSIX_SOCKETS
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <errno.h>
+#endif
 
 /* ======================== Configuration ======================== */
 
@@ -61,10 +80,12 @@ static char* s_resp_buf = NULL;
 
 /* ======================== Helpers ======================== */
 
+#if LVV_USE_POSIX_SOCKETS
 static void set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
+#endif
 
 /* Simple JSON string append helpers (no external JSON library needed) */
 
@@ -76,9 +97,9 @@ static void resp_reset(void) {
 }
 
 static void resp_append(const char* s) {
-    int len = (int)strlen(s);
+    int len = (int)lv_strlen(s);
     if (resp_len + len < LVV_MAX_RESP_LEN) {
-        memcpy(s_resp_buf + resp_len, s, len);
+        lv_memcpy(s_resp_buf + resp_len, s, len);
         resp_len += len;
         s_resp_buf[resp_len] = '\0';
     }
@@ -86,7 +107,7 @@ static void resp_append(const char* s) {
 
 static void resp_append_int(int64_t val) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", (long)val);
+    lv_snprintf(buf, sizeof(buf), "%ld", (long)val);
     resp_append(buf);
 }
 
@@ -120,11 +141,11 @@ static void resp_append_bool(bool val) {
 /* Find a string value for a key in a JSON object (very simple parser) */
 static bool json_get_string(const char* json, const char* key, char* out, int max_len) {
     char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
+    lv_snprintf(search, sizeof(search), "\"%s\"", key);
     const char* pos = strstr(json, search);
     if (!pos) return false;
 
-    pos += strlen(search);
+    pos += lv_strlen(search);
     while (*pos == ' ' || *pos == ':') pos++;
     if (*pos != '"') return false;
     pos++;
@@ -140,11 +161,11 @@ static bool json_get_string(const char* json, const char* key, char* out, int ma
 
 static bool json_get_int(const char* json, const char* key, int* out) {
     char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
+    lv_snprintf(search, sizeof(search), "\"%s\"", key);
     const char* pos = strstr(json, search);
     if (!pos) return false;
 
-    pos += strlen(search);
+    pos += lv_strlen(search);
     while (*pos == ' ' || *pos == ':') pos++;
 
     char* end;
@@ -161,10 +182,9 @@ static void lvv_log_cb(lv_log_level_t level, const char* buf) {
     if (s_prev_log_cb) s_prev_log_cb(level, buf);
     if (!s_log_capturing) return;
     /* Store in ring buffer */
-    strncpy(s_log_ring[s_log_head], buf, LVV_LOG_MAX_LEN - 1);
-    s_log_ring[s_log_head][LVV_LOG_MAX_LEN - 1] = '\0';
+    lv_strncpy(s_log_ring[s_log_head], buf, LVV_LOG_MAX_LEN);
     /* Strip trailing newline */
-    int len = (int)strlen(s_log_ring[s_log_head]);
+    int len = (int)lv_strlen(s_log_ring[s_log_head]);
     if (len > 0 && s_log_ring[s_log_head][len - 1] == '\n') {
         s_log_ring[s_log_head][len - 1] = '\0';
     }
@@ -315,19 +335,19 @@ static void build_auto_path(lv_obj_t* obj, char* buf, int max_len) {
     const char* name = get_obj_name(obj);
 
     if (name && name[0]) {
-        snprintf(buf, max_len, "%s", name);
+        lv_snprintf(buf, max_len, "%s", name);
         return;
     }
 
     if (text && text[0]) {
-        snprintf(buf, max_len, "%s[%s]", type, text);
+        lv_snprintf(buf, max_len, "%s[%s]", type, text);
         return;
     }
 
     /* Index-based: count siblings of same type */
     lv_obj_t* parent = lv_obj_get_parent(obj);
     if (!parent) {
-        snprintf(buf, max_len, "%s", type);
+        lv_snprintf(buf, max_len, "%s", type);
         return;
     }
 
@@ -339,7 +359,7 @@ static void build_auto_path(lv_obj_t* obj, char* buf, int max_len) {
         if (sibling == obj) break;
         if (lv_obj_get_class(sibling) == cls) idx++;
     }
-    snprintf(buf, max_len, "%s[%d]", type, idx);
+    lv_snprintf(buf, max_len, "%s[%d]", type, idx);
 }
 
 /* ======================== Widget Tree Serialization ======================== */
@@ -390,11 +410,11 @@ static void serialize_widget(lv_obj_t* obj, int depth) {
 
 static lv_obj_t* find_widget_recursive(lv_obj_t* obj, const char* selector) {
     const char* name = get_obj_name(obj);
-    if (name && strcmp(name, selector) == 0) return obj;
+    if (name && lv_strcmp(name, selector) == 0) return obj;
 
     char auto_path[128];
     build_auto_path(obj, auto_path, sizeof(auto_path));
-    if (strcmp(auto_path, selector) == 0) return obj;
+    if (lv_strcmp(auto_path, selector) == 0) return obj;
 
     uint32_t cnt = lv_obj_get_child_count(obj);
     for (uint32_t i = 0; i < cnt; i++) {
@@ -416,7 +436,6 @@ static lv_obj_t* find_widget(const char* selector) {
 /* Spy-owned virtual input device. LVGL's timer handler polls this via the
  * read callback, which produces proper press/move/release sequences through
  * LVGL's normal input pipeline (scrolling, gestures, long-press, etc.). */
-
 static lv_indev_t* s_spy_indev = NULL;
 static lv_indev_state_t s_indev_state = LV_INDEV_STATE_RELEASED;
 static lv_point_t s_indev_point = {0, 0};
@@ -489,8 +508,8 @@ static void inject_key_text(const char* text) {
         lv_obj_send_event(focused, LV_EVENT_KEY, &c);
     }
 
-#if LV_USE_TEXTAREA
     /* For textareas, use the direct API */
+#if LV_USE_TEXTAREA
     if (lv_obj_get_class(focused) == &lv_textarea_class) {
         lv_textarea_add_text(focused, text);
     }
@@ -503,6 +522,7 @@ static void send_response(void);
 /* ======================== Screenshot (strip-based) ======================== */
 
 /* Send raw bytes over TCP. Returns false on error. */
+#if LVV_USE_POSIX_SOCKETS
 static bool send_raw(const uint8_t* data, int size) {
     if (s_client_fd < 0) return false;
     int total = 0;
@@ -517,6 +537,7 @@ static bool send_raw(const uint8_t* data, int size) {
     }
     return true;
 }
+#endif
 
 /* Render one horizontal strip of the screen into draw_buf and send it.
  * The layer/display context must already be set up by the caller. */
@@ -659,10 +680,10 @@ static void process_command(const char* cmd) {
 
     resp_reset();
 
-    if (strcmp(cmd_name, "ping") == 0) {
+    if (lv_strcmp(cmd_name, "ping") == 0) {
         resp_append("{\"version\":\"" LVV_VERSION "\"}");
     }
-    else if (strcmp(cmd_name, "get_tree") == 0) {
+    else if (lv_strcmp(cmd_name, "get_tree") == 0) {
         lv_obj_t* screen = lv_screen_active();
         if (!screen) {
             resp_append("{\"error\":\"No active screen\"}");
@@ -672,7 +693,7 @@ static void process_command(const char* cmd) {
         serialize_widget(screen, 0);
         resp_append("}");
     }
-    else if (strcmp(cmd_name, "find") == 0) {
+    else if (lv_strcmp(cmd_name, "find") == 0) {
         char name[128] = {0};
         json_get_string(cmd, "name", name, sizeof(name));
 
@@ -685,7 +706,7 @@ static void process_command(const char* cmd) {
             resp_append("{\"error\":\"Widget not found\"}");
         }
     }
-    else if (strcmp(cmd_name, "click") == 0) {
+    else if (lv_strcmp(cmd_name, "click") == 0) {
         char name[128] = {0};
         json_get_string(cmd, "name", name, sizeof(name));
 
@@ -701,33 +722,33 @@ static void process_command(const char* cmd) {
             resp_append("{\"error\":\"Widget not found\"}");
         }
     }
-    else if (strcmp(cmd_name, "click_at") == 0) {
+    else if (lv_strcmp(cmd_name, "click_at") == 0) {
         int x = 0, y = 0;
         json_get_int(cmd, "x", &x);
         json_get_int(cmd, "y", &y);
         inject_click(x, y);
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "type") == 0) {
+    else if (lv_strcmp(cmd_name, "type") == 0) {
         char text[512] = {0};
         json_get_string(cmd, "text", text, sizeof(text));
         inject_key_text(text);
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "key") == 0) {
+    else if (lv_strcmp(cmd_name, "key") == 0) {
         char key[32] = {0};
         json_get_string(cmd, "key", key, sizeof(key));
 
         uint32_t lv_key = 0;
-        if (strcmp(key, "UP") == 0)         lv_key = LV_KEY_UP;
-        else if (strcmp(key, "DOWN") == 0)  lv_key = LV_KEY_DOWN;
-        else if (strcmp(key, "LEFT") == 0)  lv_key = LV_KEY_LEFT;
-        else if (strcmp(key, "RIGHT") == 0) lv_key = LV_KEY_RIGHT;
-        else if (strcmp(key, "ENTER") == 0) lv_key = LV_KEY_ENTER;
-        else if (strcmp(key, "ESC") == 0)   lv_key = LV_KEY_ESC;
-        else if (strcmp(key, "BACKSPACE") == 0) lv_key = LV_KEY_BACKSPACE;
-        else if (strcmp(key, "NEXT") == 0)  lv_key = LV_KEY_NEXT;
-        else if (strcmp(key, "PREV") == 0)  lv_key = LV_KEY_PREV;
+        if (lv_strcmp(key, "UP") == 0)         lv_key = LV_KEY_UP;
+        else if (lv_strcmp(key, "DOWN") == 0)  lv_key = LV_KEY_DOWN;
+        else if (lv_strcmp(key, "LEFT") == 0)  lv_key = LV_KEY_LEFT;
+        else if (lv_strcmp(key, "RIGHT") == 0) lv_key = LV_KEY_RIGHT;
+        else if (lv_strcmp(key, "ENTER") == 0) lv_key = LV_KEY_ENTER;
+        else if (lv_strcmp(key, "ESC") == 0)   lv_key = LV_KEY_ESC;
+        else if (lv_strcmp(key, "BACKSPACE") == 0) lv_key = LV_KEY_BACKSPACE;
+        else if (lv_strcmp(key, "NEXT") == 0)  lv_key = LV_KEY_NEXT;
+        else if (lv_strcmp(key, "PREV") == 0)  lv_key = LV_KEY_PREV;
 
         if (lv_key) {
             lv_group_t* group = lv_group_get_default();
@@ -742,11 +763,12 @@ static void process_command(const char* cmd) {
             resp_append("{\"error\":\"Unknown key\"}");
         }
     }
-    else if (strcmp(cmd_name, "screenshot") == 0) {
+    else if (lv_strcmp(cmd_name, "screenshot") == 0) {
         cmd_screenshot();
         return;  /* response already sent (binary transfer) */
+
     }
-    else if (strcmp(cmd_name, "get_screen_info") == 0) {
+    else if (lv_strcmp(cmd_name, "get_screen_info") == 0) {
         lv_display_t* disp = lv_display_get_default();
         if (disp) {
             resp_append("{\"width\":");
@@ -758,7 +780,7 @@ static void process_command(const char* cmd) {
             resp_append("{\"error\":\"No display\"}");
         }
     }
-    else if (strcmp(cmd_name, "get_props") == 0) {
+    else if (lv_strcmp(cmd_name, "get_props") == 0) {
         char name[128] = {0};
         json_get_string(cmd, "name", name, sizeof(name));
 
@@ -782,25 +804,25 @@ static void process_command(const char* cmd) {
             resp_append("{\"error\":\"Widget not found\"}");
         }
     }
-    else if (strcmp(cmd_name, "press") == 0) {
+    else if (lv_strcmp(cmd_name, "press") == 0) {
         int x = 0, y = 0;
         json_get_int(cmd, "x", &x);
         json_get_int(cmd, "y", &y);
         inject_press(x, y);
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "release") == 0) {
+    else if (lv_strcmp(cmd_name, "release") == 0) {
         inject_release();
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "move_to") == 0) {
+    else if (lv_strcmp(cmd_name, "move_to") == 0) {
         int x = 0, y = 0;
         json_get_int(cmd, "x", &x);
         json_get_int(cmd, "y", &y);
         inject_move(x, y);
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "swipe") == 0) {
+    else if (lv_strcmp(cmd_name, "swipe") == 0) {
         int x = 0, y = 0, x_end = 0, y_end = 0, duration = 300;
         json_get_int(cmd, "x", &x);
         json_get_int(cmd, "y", &y);
@@ -822,7 +844,7 @@ static void process_command(const char* cmd) {
         inject_release();
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "get_logs") == 0) {
+    else if (lv_strcmp(cmd_name, "get_logs") == 0) {
         resp_append("{\"logs\":[");
         if (s_log_count > 0) {
             int start = (s_log_count < LVV_LOG_RING_SIZE)
@@ -836,12 +858,12 @@ static void process_command(const char* cmd) {
         }
         resp_append("]}");
     }
-    else if (strcmp(cmd_name, "clear_logs") == 0) {
+    else if (lv_strcmp(cmd_name, "clear_logs") == 0) {
         s_log_count = 0;
         s_log_head = 0;
         resp_append("{\"success\":true}");
     }
-    else if (strcmp(cmd_name, "set_log_capture") == 0) {
+    else if (lv_strcmp(cmd_name, "set_log_capture") == 0) {
         int enable = 0;
         json_get_int(cmd, "enable", &enable);
         if (enable && !s_log_capturing) {
@@ -856,7 +878,7 @@ static void process_command(const char* cmd) {
         resp_append_bool(s_log_capturing);
         resp_append("}");
     }
-    else if (strcmp(cmd_name, "get_metrics") == 0) {
+    else if (lv_strcmp(cmd_name, "get_metrics") == 0) {
         resp_append("{\"poll_rate\":");
         resp_append_int(s_poll_rate);
         resp_append(",\"uptime_ms\":");
@@ -870,7 +892,9 @@ static void process_command(const char* cmd) {
     }
 }
 
-/* ======================== Network ======================== */
+/* ======================== Network (POSIX sockets) ======================== */
+
+#if LVV_USE_POSIX_SOCKETS
 
 static void send_response(void) {
     if (s_client_fd < 0 || resp_len == 0) return;
@@ -904,8 +928,7 @@ static void accept_client(void) {
     set_nonblocking(s_client_fd);
     s_cmd_len = 0;
 
-    printf("[lvv_spy] Client connected from %s:%d\n",
-           inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+    LV_LOG_INFO("lvv_spy: client connected");
 }
 
 static void read_client(void) {
@@ -915,7 +938,7 @@ static void read_client(void) {
     int n = (int)recv(s_client_fd, buf, sizeof(buf), 0);
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            printf("[lvv_spy] Client disconnected\n");
+            LV_LOG_INFO("lvv_spy: client disconnected");
             close(s_client_fd);
             s_client_fd = -1;
             s_cmd_len = 0;
@@ -943,36 +966,36 @@ bool lvv_spy_init(uint16_t port) {
     /* Save the app's existing log callback so we can restore it later */
     s_prev_log_cb = LV_GLOBAL_DEFAULT()->custom_log_print_cb;
 
-    s_resp_buf = (char*)malloc(LVV_MAX_RESP_LEN);
+    s_resp_buf = (char*)lv_malloc(LVV_MAX_RESP_LEN);
     if (!s_resp_buf) {
-        fprintf(stderr, "[lvv_spy] Failed to allocate response buffer\n");
+        LV_LOG_ERROR("lvv_spy: failed to allocate response buffer");
         return false;
     }
 
     s_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (s_listen_fd < 0) {
-        fprintf(stderr, "[lvv_spy] socket() failed: %s\n", strerror(errno));
+        LV_LOG_ERROR("lvv_spy: socket() failed");
         return false;
     }
 
     int opt = 1;
     setsockopt(s_listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    struct sockaddr_in addr = {0};
+    struct sockaddr_in addr;
+    lv_memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
     if (bind(s_listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "[lvv_spy] bind() failed on port %d: %s\n",
-                port, strerror(errno));
+        LV_LOG_ERROR("lvv_spy: bind() failed on port %d", port);
         close(s_listen_fd);
         s_listen_fd = -1;
         return false;
     }
 
     if (listen(s_listen_fd, 1) < 0) {
-        fprintf(stderr, "[lvv_spy] listen() failed: %s\n", strerror(errno));
+        LV_LOG_ERROR("lvv_spy: listen() failed");
         close(s_listen_fd);
         s_listen_fd = -1;
         return false;
@@ -980,7 +1003,7 @@ bool lvv_spy_init(uint16_t port) {
 
     set_nonblocking(s_listen_fd);
 
-    printf("[lvv_spy] Listening on port %d (v%s)\n", port, LVV_VERSION);
+    LV_LOG_INFO("lvv_spy: listening on port %d (v%s)", port, LVV_VERSION);
     return true;
 }
 
@@ -1015,6 +1038,11 @@ void lvv_spy_process(void) {
 }
 
 void lvv_spy_deinit(void) {
+    /* Restore app's log callback if we took it over */
+    if (s_log_capturing) {
+        lv_log_register_print_cb(s_prev_log_cb);
+        s_log_capturing = false;
+    }
     if (s_client_fd >= 0) {
         close(s_client_fd);
         s_client_fd = -1;
@@ -1024,7 +1052,7 @@ void lvv_spy_deinit(void) {
         s_listen_fd = -1;
     }
     if (s_resp_buf) {
-        free(s_resp_buf);
+        lv_free(s_resp_buf);
         s_resp_buf = NULL;
     }
     s_cmd_len = 0;
@@ -1033,3 +1061,37 @@ void lvv_spy_deinit(void) {
 bool lvv_spy_is_connected(void) {
     return s_client_fd >= 0;
 }
+
+#else /* !LVV_USE_POSIX_SOCKETS */
+
+/* Stub implementations when no transport is available.
+ * Users must implement a custom transport and call process_command() directly,
+ * or define their own lvv_spy_init/process/deinit. */
+
+static void send_response(void) { /* no-op */ }
+
+bool lvv_spy_init(uint16_t port) {
+    (void)port;
+    s_prev_log_cb = LV_GLOBAL_DEFAULT()->custom_log_print_cb;
+    s_resp_buf = (char*)lv_malloc(LVV_MAX_RESP_LEN);
+    if (!s_resp_buf) {
+        LV_LOG_ERROR("lvv_spy: failed to allocate response buffer");
+        return false;
+    }
+    LV_LOG_ERROR("lvv_spy: no transport configured (define LVV_USE_POSIX_SOCKETS or implement custom transport)");
+    lv_free(s_resp_buf);
+    s_resp_buf = NULL;
+    return false;
+}
+
+void lvv_spy_process(void) { lvv_update_metrics(); }
+void lvv_spy_deinit(void) {
+    if (s_log_capturing) {
+        lv_log_register_print_cb(s_prev_log_cb);
+        s_log_capturing = false;
+    }
+    if (s_resp_buf) { lv_free(s_resp_buf); s_resp_buf = NULL; }
+}
+bool lvv_spy_is_connected(void) { return false; }
+
+#endif /* LVV_USE_POSIX_SOCKETS */
