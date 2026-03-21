@@ -96,9 +96,11 @@ if(LVV_BUILD_TESTS)
         tests/test_protocol_parse.cpp
         tests/test_selectors.cpp
         tests/test_api_types.cpp
+        tests/test_protocol.cpp
         src/core/widget_tree.cpp
         src/core/visual_regression.cpp
         src/core/screen_capture.cpp
+        src/protocol/protocol.cpp
     )
 
     target_include_directories(lvv_tests PRIVATE
