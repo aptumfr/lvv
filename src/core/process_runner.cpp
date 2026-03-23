@@ -157,7 +157,7 @@ ProcessResult ProcessRunner::run_posix() const {
         if (n > 0) {
             result.output.append(buf, n);
         } else if (n == 0) {
-            break;
+            break;  // EOF — child closed pipe
         } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
             if (std::chrono::steady_clock::now() >= deadline) {
                 kill(pid, SIGTERM);
@@ -168,7 +168,7 @@ ProcessResult ProcessRunner::run_posix() const {
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
-            break;
+            break;  // read error (not EAGAIN)
         }
     }
 

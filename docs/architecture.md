@@ -21,7 +21,8 @@ LVV is a test automation tool for LVGL-based UIs. It connects to a target runnin
 
 ## Layered Architecture
 
-The codebase is organized in layers, each depending only on layers below it:
+The codebase is still broadly layered, but not as a strict one-direction dependency graph.
+The main flow is layered, with a few pragmatic cross-layer dependencies in orchestration and scripting support:
 
 ```
   app/          CLI commands, orchestration
@@ -67,6 +68,8 @@ All commands are synchronous request/response, protected by a mutex.
 - **VisualRegression** - pixel-by-pixel image comparison with anti-aliasing detection and configurable thresholds
 - **JUnit XML** - generates JUnit-compatible test reports for CI
 
+`TestRunner` is the main exception to a strict layering rule: it lives in `core/` but depends on `ScriptEngine` from `scripting/`.
+
 ### Scripting Layer (`src/scripting/`)
 
 - **ScriptEngine** - runs PocketPy on a dedicated thread (PocketPy's VM is thread-local). Supports execution timeout with cancellation.
@@ -84,6 +87,11 @@ Orchestrates everything based on CLI subcommand:
 - `serve` - starts web server for interactive use
 - `run` - headless test execution with JUnit output
 - `ping`, `tree`, `screenshot` - one-shot CLI utilities
+
+In practice, think of the architecture as:
+- layered data path: transport -> protocol -> higher-level services
+- orchestration layer at the top: app/server wiring the subsystems together
+- a few intentional convenience dependencies where strict purity would add more complexity than value
 
 ## Spy (`spy/lvv_spy.c`)
 

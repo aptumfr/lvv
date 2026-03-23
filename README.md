@@ -18,9 +18,20 @@ LVV is a test automation tool for [LVGL](https://lvgl.io/) applications. It conn
 
 **lvv_spy** is a small C library embedded in your LVGL application. It listens for connections and handles commands.
 
+## Default Ports
+
+| Service | Default | Configured by | Notes |
+|---|---|---|---|
+| Spy TCP server | `5555` | `lvv_spy_init(port)` on the target, `lvv --port` on the host | Used by `ping`, `tree`, `screenshot`, `run`, and `serve` to talk to the target |
+| Web UI / REST / WebSocket | `8080` | `lvv serve --web-port` | The browser UI, REST API, and live stream all share this port |
+
+If you use `--serial`, the host talks to the target over UART instead of TCP, so there is no target-side network port.
+
+Both the spy and the web server are unauthenticated by default. Keep them on trusted networks or local development machines only.
+
 ## Building
 
-Requirements: C++20 compiler, CMake 3.20+, pthreads.
+Requirements: C++20 compiler, CMake 3.20+, pthreads, and a JPEG development library (`libjpeg` or `libjpeg-turbo`).
 
 ```bash
 mkdir build && cd build
@@ -201,7 +212,9 @@ lvv serve
 lvv --port 5555 serve --web-port 9090
 ```
 
-Then open `http://localhost:8080` in a browser.
+Then open the configured web port in a browser:
+- `http://localhost:8080` for `lvv serve`
+- `http://localhost:9090` for `lvv --port 5555 serve --web-port 9090`
 
 | Option | Default | Description |
 |---|---|---|
@@ -260,7 +273,7 @@ lvv.assert_visible("settings_title")
 lvv.screenshot_compare("settings.png", 0.5)
 
 # Navigate back
-lvv.click("btn_back")
+lvv.click("btn_back_settings")
 lvv.wait_for("home_screen", 2000)
 ```
 
@@ -335,6 +348,10 @@ docker run --rm lvv-ci
 ```
 
 **GitHub Actions:** See `.github/workflows/ci.yml` for a ready-made workflow.
+
+## License
+
+LVV is licensed under the Business Source License 1.1. See [LICENSE](LICENSE) for the current terms and the Change Date.
 
 ## Documentation
 

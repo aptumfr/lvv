@@ -22,7 +22,7 @@ static bool is_antialiased(const Image& img, int x, int y, double threshold) {
     const int h = img.height;
 
     int high_contrast_neighbors = 0;
-    const uint8_t* center = img.pixels.data() + (y * w + x) * 4;
+    const uint8_t* center = img.pixels.data() + (static_cast<size_t>(y) * w + x) * 4;
 
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
@@ -30,7 +30,7 @@ static bool is_antialiased(const Image& img, int x, int y, double threshold) {
             int nx = x + dx, ny = y + dy;
             if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
 
-            const uint8_t* neighbor = img.pixels.data() + (ny * w + nx) * 4;
+            const uint8_t* neighbor = img.pixels.data() + (static_cast<size_t>(ny) * w + nx) * 4;
             double max_diff = 0;
             for (int c = 0; c < 3; c++) {
                 max_diff = std::max(max_diff,
@@ -69,24 +69,28 @@ DiffResult compare_images(const Image& reference, const Image& actual,
     result.diff_image.width = w;
     result.diff_image.height = h;
     result.diff_image.channels = 4;
-    result.diff_image.pixels.resize(w * h * 4);
+    result.diff_image.pixels.resize(static_cast<size_t>(w) * h * 4);
 
     int diff_count = 0;
     int ignored_count = 0;
+
+    auto px_offset = [w](int y, int x) -> size_t {
+        return (static_cast<size_t>(y) * w + x) * 4;
+    };
 
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             if (in_ignore_region(x, y, opts.ignore_regions)) {
                 // Gray for ignored — excluded from total
-                auto* dp = result.diff_image.pixels.data() + (y * w + x) * 4;
+                auto* dp = result.diff_image.pixels.data() + px_offset(y, x);
                 dp[0] = 128; dp[1] = 128; dp[2] = 128; dp[3] = 255;
                 ignored_count++;
                 continue;
             }
 
-            const auto* rp = reference.pixels.data() + (y * w + x) * 4;
-            const auto* ap = actual.pixels.data() + (y * w + x) * 4;
-            auto* dp = result.diff_image.pixels.data() + (y * w + x) * 4;
+            const auto* rp = reference.pixels.data() + px_offset(y, x);
+            const auto* ap = actual.pixels.data() + px_offset(y, x);
+            auto* dp = result.diff_image.pixels.data() + px_offset(y, x);
 
             double max_diff = 0;
             for (int c = 0; c < 3; c++) {

@@ -31,7 +31,7 @@ struct RouteCtx {
 // ============================================================
 
 // JSON 200 response with exception-to-500 wrapping
-static crow::response json_ok(nlohmann::json j) {
+static crow::response json_ok(const nlohmann::json& j) {
     crow::response resp(j.dump());
     resp.set_header("Content-Type", "application/json");
     return resp;

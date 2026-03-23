@@ -38,8 +38,8 @@ Image decode_raw_pixels(const std::vector<uint8_t>& raw, int width, int height,
     img.pixels.resize(static_cast<size_t>(width) * height * 4);
 
     for (int y = 0; y < height; y++) {
-        const uint8_t* src = raw.data() + y * stride;
-        uint8_t* dst = img.pixels.data() + y * width * 4;
+        const uint8_t* src = raw.data() + static_cast<size_t>(y) * stride;
+        uint8_t* dst = img.pixels.data() + static_cast<size_t>(y) * width * 4;
 
         for (int x = 0; x < width; x++) {
             switch (fmt) {
@@ -179,9 +179,9 @@ std::vector<uint8_t> encode_jpeg(const Image& img, int quality) {
 
     // Feed scanlines, stripping alpha channel (reuse buffer across calls)
     static thread_local std::vector<uint8_t> row;
-    row.resize(img.width * 3);
+    row.resize(static_cast<size_t>(img.width) * 3);
     while (cinfo.next_scanline < cinfo.image_height) {
-        const uint8_t* src = img.pixels.data() + cinfo.next_scanline * img.width * 4;
+        const uint8_t* src = img.pixels.data() + static_cast<size_t>(cinfo.next_scanline) * img.width * 4;
         uint8_t* dst = row.data();
         for (int x = 0; x < img.width; x++) {
             dst[0] = src[0];

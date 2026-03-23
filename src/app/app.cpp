@@ -110,16 +110,16 @@ int App::doctor(const AppConfig& config) {
     python_exe = "python3";
 #endif
 #ifdef _WIN32
-    bool python_ok = (std::system((python_exe + " --version > NUL 2>&1").c_str()) == 0);
+    const bool python_ok = (std::system((python_exe + " --version > NUL 2>&1").c_str()) == 0);
 #else
-    bool python_ok = (std::system((python_exe + " --version > /dev/null 2>&1").c_str()) == 0);
+    const bool python_ok = (std::system((python_exe + " --version > /dev/null 2>&1").c_str()) == 0);
 #endif
     check("System Python", python_ok,
           python_ok ? python_exe : python_exe + " not found in PATH");
 
     // Web UI static files
     auto static_dir = default_static_dir();
-    bool has_web = std::filesystem::is_directory(static_dir);
+    const bool has_web = std::filesystem::is_directory(static_dir);
     check("Web UI", has_web,
           has_web ? static_dir : "not found (run npm build in web/)");
 
@@ -172,7 +172,7 @@ int App::screenshot(const AppConfig& config, const std::string& output) {
             return 1;
         }
 
-        std::string out_path = output.empty() ? "screenshot.png" : output;
+        const std::string out_path = output.empty() ? "screenshot.png" : output;
         if (save_png(img, out_path)) {
             LOG_INFO(log::get(), "Screenshot saved to {}", out_path);
             return 0;
@@ -320,7 +320,7 @@ static TestResult run_one_test_python(
         .run();
 
     auto end = std::chrono::steady_clock::now();
-    double duration = std::chrono::duration<double>(end - start).count();
+    const double duration = std::chrono::duration<double>(end - start).count();
 
     TestResult result;
     result.name = name;
@@ -341,7 +341,7 @@ static TestResult run_one_test_python(
 }
 
 int App::run_tests_python(const AppConfig& config) {
-    [[maybe_unused]] WinsockInit winsock;  // no-op on Linux, required on Windows
+    [[maybe_unused]] const WinsockInit winsock;  // no-op on Linux, required on Windows
     if (!connect(config)) return 1;
 
     auto python_dir = find_lvv_python_dir();
@@ -353,7 +353,7 @@ int App::run_tests_python(const AppConfig& config) {
     auto python_exe = resolve_python_exe(config);
 
     // Start ephemeral HTTP server
-    int api_port = find_free_port();
+    const int api_port = find_free_port();
     if (api_port == 0) {
         LOG_ERROR(log::get(), "Cannot find a free port");
         return 1;
@@ -383,7 +383,7 @@ int App::run_tests_python(const AppConfig& config) {
 
     LOG_INFO(log::get(), "Running {} test(s) with system Python...", files.size());
 
-    std::map<std::string, std::string> env = {
+    const std::map<std::string, std::string> env = {
         {"LVV_URL", "http://127.0.0.1:" + std::to_string(api_port)},
         {"PYTHONPATH", build_pythonpath(python_dir)},
         {"LVV_REF_IMAGES", std::filesystem::absolute(config.ref_images_dir).string()},

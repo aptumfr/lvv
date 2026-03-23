@@ -10,7 +10,7 @@ Protocol::Protocol(ITransport* transport)
     : transport_(transport) {}
 
 bool Protocol::connect() {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     return transport_->connect();
 }
 
@@ -22,18 +22,18 @@ void Protocol::disconnect() {
     // 2) Acquire the lock, then close(fd) + clear buffers. The lock
     //    guarantees no command is mid-flight when state is mutated.
     transport_->abort();
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     transport_->disconnect();
 }
 
 bool Protocol::is_connected() const {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     return transport_->is_connected();
 }
 
 nlohmann::json Protocol::send_command(const nlohmann::json& cmd) {
-    std::lock_guard lock(mutex_);
-    std::string msg = cmd.dump();
+    const std::lock_guard lock(mutex_);
+    const std::string msg = cmd.dump();
     if (!transport_->send(msg)) {
         throw std::runtime_error("Failed to send command");
     }
@@ -72,7 +72,7 @@ nlohmann::json Protocol::get_tree(const std::string& root) {
     }
     auto result = send_command(cmd);
     {
-        std::lock_guard lock(cache_mutex_);
+        const std::lock_guard lock(cache_mutex_);
         tree_cache_ = result;
         tree_cache_time_ = std::chrono::steady_clock::now();
     }
@@ -81,7 +81,7 @@ nlohmann::json Protocol::get_tree(const std::string& root) {
 
 nlohmann::json Protocol::get_tree_cached(int ttl_ms) {
     {
-        std::lock_guard lock(cache_mutex_);
+        const std::lock_guard lock(cache_mutex_);
         auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - tree_cache_time_);
         if (!tree_cache_.is_null() && age.count() < ttl_ms) {
@@ -92,7 +92,7 @@ nlohmann::json Protocol::get_tree_cached(int ttl_ms) {
 }
 
 void Protocol::invalidate_tree_cache() {
-    std::lock_guard lock(cache_mutex_);
+    const std::lock_guard lock(cache_mutex_);
     tree_cache_ = nullptr;
 }
 
@@ -158,9 +158,9 @@ bool Protocol::key(const std::string& key_code) {
 }
 
 Image Protocol::screenshot() {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
 
-    std::string msg = R"({"cmd":"screenshot"})";
+    const std::string msg = R"({"cmd":"screenshot"})";
     if (!transport_->send(msg)) {
         throw std::runtime_error("Failed to send command");
     }
@@ -178,11 +178,11 @@ Image Protocol::screenshot() {
         throw std::runtime_error("Target error: " + hdr["error"].get<std::string>());
     }
 
-    int width = hdr.value("width", 0);
-    int height = hdr.value("height", 0);
-    int stride = hdr.value("stride", 0);
-    int format = hdr.value("format", 0);
-    size_t data_size = hdr.value("data_size", 0);
+    const int width = hdr.value("width", 0);
+    const int height = hdr.value("height", 0);
+    const int stride = hdr.value("stride", 0);
+    const int format = hdr.value("format", 0);
+    const size_t data_size = hdr.value("data_size", 0);
 
     if (width <= 0 || height <= 0 || stride <= 0 || data_size == 0) return {};
     if (width > 16384 || height > 16384) return {};
@@ -290,14 +290,14 @@ bool Protocol::drag(int x1, int y1, int x2, int y2, int duration_ms, int steps,
     if (steps < 1) steps = 1;
     if (!press(x1, y1)) return false;
 
-    int step_delay = duration_ms / steps;
+    const int step_delay = duration_ms / steps;
     for (int i = 1; i <= steps; ++i) {
         if (cancellable_sleep(step_delay, cancel)) {
             safe_release(*this);
             return false;
         }
-        int cx = x1 + (x2 - x1) * i / steps;
-        int cy = y1 + (y2 - y1) * i / steps;
+        const int cx = x1 + (x2 - x1) * i / steps;
+        const int cy = y1 + (y2 - y1) * i / steps;
         if (!move_to(cx, cy)) {
             safe_release(*this);
             return false;

@@ -248,8 +248,8 @@ constexpr auto fn_get_props = [](py_StackRef argv) {
 };
 constexpr auto fn_screen_info = [](py_StackRef) {
     auto info = g_protocol->get_screen_info();
-    nlohmann::json j = {{"width", info.width}, {"height", info.height},
-                        {"color_format", info.color_format}};
+    const nlohmann::json j = {{"width", info.width}, {"height", info.height},
+                              {"color_format", info.color_format}};
     py_newstr(py_retval(), j.dump().c_str());
 };
 // -- Log capture & metrics --
@@ -402,7 +402,7 @@ static bool py_lvv_assert_visible(int argc, py_StackRef argv) {
     try {
         auto w = g_protocol->find(name);
         if (!w || !w->visible)
-            return py_exception(tp_AssertionError, "Widget '%s' is not visible", name);
+            return py_exception(tp_AssertionError, "Widget '%s' is not visible", name.c_str());
         py_newbool(py_retval(), true);
         return true;
     } catch (const std::exception& e) { return py_exception(tp_RuntimeError, "%s", e.what()); }
@@ -415,7 +415,7 @@ static bool py_lvv_assert_hidden(int argc, py_StackRef argv) {
     try {
         auto w = g_protocol->find(name);
         if (w && w->visible)
-            return py_exception(tp_AssertionError, "Widget '%s' is visible (expected hidden)", name);
+            return py_exception(tp_AssertionError, "Widget '%s' is visible (expected hidden)", name.c_str());
         py_newbool(py_retval(), true);
         return true;
     } catch (const std::exception& e) { return py_exception(tp_RuntimeError, "%s", e.what()); }
@@ -543,8 +543,8 @@ static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
     const int timeout_ms = py_toint(py_arg(1));
     if (!check_protocol()) return false;
 
-    std::string expr(name_or_selector);
-    bool is_selector = expr.find('=') != std::string::npos;
+    const std::string expr(name_or_selector);
+    const bool is_selector = expr.find('=') != std::string::npos;
 
     WidgetSelector sel;
     if (is_selector) {
@@ -569,7 +569,11 @@ static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
                 auto widget = g_protocol->find(resolve_name(name_or_selector));
                 if (widget) { ret_widget_json(*widget); return true; }
             }
-        } catch (...) {}
+        } catch (const widget_not_found&) {
+            // Expected: widget doesn't exist yet, keep polling
+        } catch (const std::runtime_error&) {
+            // Transport hiccup during polling, keep retrying
+        }
         if (std::chrono::steady_clock::now() >= deadline)
             return py_exception(tp_TimeoutError,
                 "Timed out waiting for '%s' (%dms)", name_or_selector, timeout_ms);
@@ -583,8 +587,8 @@ static bool py_lvv_wait_for(int argc, py_StackRef argv) {
     const int timeout_ms = py_toint(py_arg(1));
     if (!check_protocol()) return false;
 
-    std::string expr(name_or_selector);
-    bool is_selector = expr.find('=') != std::string::npos;
+    const std::string expr(name_or_selector);
+    const bool is_selector = expr.find('=') != std::string::npos;
 
     WidgetSelector sel;
     if (is_selector) {
@@ -603,7 +607,11 @@ static bool py_lvv_wait_for(int argc, py_StackRef argv) {
                 ? find_visible_by_selector(sel)
                 : find_visible_by_name(resolve_name(name_or_selector));
             if (found) { py_newbool(py_retval(), true); return true; }
-        } catch (...) {}
+        } catch (const widget_not_found&) {
+            // Expected: widget doesn't exist yet
+        } catch (const std::runtime_error&) {
+            // Transport hiccup during polling
+        }
         if (std::chrono::steady_clock::now() >= deadline)
             return py_exception(tp_TimeoutError,
                 "Timed out waiting for widget '%s' (%dms)", name_or_selector, timeout_ms);
@@ -641,7 +649,11 @@ static bool py_lvv_wait_until(int argc, py_StackRef argv) {
                     }
                 }
             }
-        } catch (...) {}
+        } catch (const widget_not_found&) {
+            // Expected: widget doesn't exist yet
+        } catch (const std::runtime_error&) {
+            // Transport hiccup during polling
+        }
         if (std::chrono::steady_clock::now() >= deadline)
             return py_exception(tp_TimeoutError,
                 "Timed out waiting for '%s'.%s == '%s' (last: '%s', %dms)",
