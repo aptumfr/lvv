@@ -298,6 +298,36 @@ lvv.assert_false("disabled_btn", "clickable")
 
 ---
 
+## Tree Snapshots
+
+Compare widget tree structure — catches missing widgets, wrong hierarchy, property changes
+that visual regression misses when the layout looks the same.
+
+### `lvv.assert_tree(ref_path) -> bool`
+
+Compare the current widget tree against a reference JSON file.
+On first run (no reference), saves the current tree and returns `True`.
+On subsequent runs, compares and raises `AssertionError` with a detailed diff.
+
+The comparison checks: `type`, `name`, `text`, `visible`, `clickable`, and children.
+It ignores: `x`, `y`, `width`, `height`, `id`, `auto_path` (layout-dependent).
+
+```python
+lvv.assert_tree("home_tree.json")
+```
+
+Relative paths resolve against `--ref-images` directory (same as `screenshot_compare`).
+
+### `lvv.save_tree(path) -> bool`
+
+Save the normalized widget tree to a JSON file (for manual inspection or custom comparison).
+
+```python
+lvv.save_tree("/tmp/current_tree.json")
+```
+
+---
+
 ## Visual Regression
 
 ### `lvv.screenshot(path) -> bool`

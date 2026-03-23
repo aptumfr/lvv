@@ -32,6 +32,7 @@ set(LVV_SOURCES
     src/core/visual_regression.cpp
     src/core/test_runner.cpp
     src/core/process_runner.cpp
+    src/core/tree_snapshot.cpp
     src/scripting/script_engine.cpp
     src/scripting/lvv_module.cpp
     src/server/web_server.cpp
@@ -92,7 +93,9 @@ if(LVV_BUILD_TESTS)
         tests/test_selectors.cpp
         tests/test_api_types.cpp
         tests/test_protocol.cpp
+        tests/test_tree_snapshot.cpp
         src/core/widget_tree.cpp
+        src/core/tree_snapshot.cpp
         src/core/visual_regression.cpp
         src/core/screen_capture.cpp
         src/protocol/protocol.cpp

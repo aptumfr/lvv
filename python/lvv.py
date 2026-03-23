@@ -338,6 +338,112 @@ def assert_false(name, prop):
     return True
 
 
+# ---- Tree snapshots ----
+
+def _normalize_node(node):
+    """Strip volatile fields, keep structural properties."""
+    j = {
+        "type": node.get("type", ""),
+        "name": node.get("name", ""),
+        "text": node.get("text", ""),
+        "visible": node.get("visible", False),
+        "clickable": node.get("clickable", False),
+    }
+    children = node.get("children", [])
+    if children:
+        j["children"] = [_normalize_node(c) for c in children]
+    return j
+
+
+def _diff_trees(expected, actual, path=""):
+    """Compare two normalized trees, return list of difference strings."""
+    diffs = []
+    label = path or (expected.get("name") or expected.get("type", "?"))
+
+    for prop in ("type", "name", "text"):
+        ev = expected.get(prop, "")
+        av = actual.get(prop, "")
+        if ev != av:
+            diffs.append(f"{label}: property '{prop}' changed: '{ev}' -> '{av}'")
+
+    for prop in ("visible", "clickable"):
+        ev = expected.get(prop, False)
+        av = actual.get(prop, False)
+        if ev != av:
+            diffs.append(f"{label}: property '{prop}' changed: {ev} -> {av}")
+
+    ec = expected.get("children", [])
+    ac = actual.get("children", [])
+
+    # Match by name when possible, fall back to index for unnamed
+    actual_by_name = {}
+    for i, c in enumerate(ac):
+        n = c.get("name", "")
+        if n:
+            actual_by_name[n] = i
+    actual_matched = [False] * len(ac)
+
+    for i, e_child in enumerate(ec):
+        e_name = e_child.get("name", "")
+        child_label = f"{label}/{e_name or e_child.get('type', '?')}"
+
+        if e_name and e_name in actual_by_name:
+            j = actual_by_name[e_name]
+            actual_matched[j] = True
+            diffs.extend(_diff_trees(e_child, ac[j], child_label))
+        elif i < len(ac) and not actual_matched[i]:
+            actual_matched[i] = True
+            diffs.extend(_diff_trees(e_child, ac[i], child_label))
+        else:
+            diffs.append(f"{label}: missing child '{e_name or e_child.get('type', '?')}'")
+
+    for i, a_child in enumerate(ac):
+        if not actual_matched[i]:
+            n = a_child.get("name") or a_child.get("type", "?")
+            diffs.append(f"{label}: extra child '{n}'")
+
+    return diffs
+
+
+def save_tree(path):
+    """Save normalized widget tree to a JSON file."""
+    tree = json.loads(get_tree())
+    normalized = _normalize_node(tree)
+    with open(path, "w") as f:
+        json.dump(normalized, f, indent=2)
+    return True
+
+
+def assert_tree(ref_path):
+    """Compare current tree against a reference JSON file.
+    On first run (no reference), saves the current tree and passes.
+    Relative paths resolve against LVV_REF_IMAGES (same as screenshot_compare)."""
+    # Resolve relative paths against ref_images dir
+    if ref_path and ref_path[0] != '/':
+        ref_dir = os.environ.get("LVV_REF_IMAGES", "ref_images")
+        ref_path = os.path.join(ref_dir, ref_path)
+
+    tree = json.loads(get_tree())
+    actual = _normalize_node(tree)
+
+    try:
+        with open(ref_path) as f:
+            expected = json.load(f)
+    except FileNotFoundError:
+        os.makedirs(os.path.dirname(ref_path) or ".", exist_ok=True)
+        with open(ref_path, "w") as f:
+            json.dump(actual, f, indent=2)
+        return True
+
+    diffs = _diff_trees(expected, actual)
+    if not diffs:
+        return True
+    msg = f"Tree structure mismatch ({len(diffs)} differences):\n"
+    for d in diffs:
+        msg += f"  {d}\n"
+    raise AssertionError(msg)
+
+
 # ---- Screenshots ----
 
 def screenshot(path):

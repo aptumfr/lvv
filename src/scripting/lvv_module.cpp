@@ -4,6 +4,7 @@
 #include "core/screen_capture.hpp"
 #include "core/visual_regression.hpp"
 #include "core/widget_tree.hpp"
+#include "core/tree_snapshot.hpp"
 
 #include "pocketpy.h"
 
@@ -537,6 +538,86 @@ static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
     }
 }
 
+// Tree snapshot: save normalized tree to a JSON file
+static bool py_lvv_save_tree(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* path = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+    try {
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+        auto normalized = normalize_tree(tree.root());
+
+        std::ofstream f(path);
+        if (!f.is_open())
+            return py_exception(tp_RuntimeError, "Cannot write to: %s", path);
+        f << normalized.dump(2);
+        py_newbool(py_retval(), true);
+        return true;
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
+// Tree snapshot: compare current tree against a reference JSON file.
+// On first run (no reference), saves the current tree and passes.
+// On subsequent runs, compares and reports differences.
+static bool py_lvv_assert_tree(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    const char* ref_path_arg = py_tostr(py_arg(0));
+    if (!check_protocol()) return false;
+
+    // Resolve relative paths against ref_images directory
+    std::string ref_path = ref_path_arg;
+    if (!ref_path.empty() && ref_path[0] != '/') {
+        ref_path = g_ref_images_dir + "/" + ref_path;
+    }
+
+    try {
+        // Get current tree
+        auto tree_json = g_protocol->get_tree();
+        WidgetTree tree;
+        tree.update(tree_json);
+        auto actual = normalize_tree(tree.root());
+
+        // Load or create reference
+        std::ifstream f(ref_path);
+        if (!f.is_open()) {
+            // First run: save reference
+            auto parent = std::filesystem::path(ref_path).parent_path();
+            if (!parent.empty()) std::filesystem::create_directories(parent);
+            std::ofstream out(ref_path);
+            if (!out.is_open())
+                return py_exception(tp_RuntimeError, "Cannot write tree reference: %s", ref_path.c_str());
+            out << actual.dump(2);
+            py_newbool(py_retval(), true);
+            return true;
+        }
+
+        // Parse reference
+        auto expected = nlohmann::json::parse(f, nullptr, false);
+        if (expected.is_discarded())
+            return py_exception(tp_RuntimeError, "Invalid JSON in tree reference: %s", ref_path.c_str());
+
+        // Compare
+        auto diffs = diff_trees(expected, actual);
+        if (diffs.empty()) {
+            py_newbool(py_retval(), true);
+            return true;
+        }
+
+        // Build error message
+        std::string msg = "Tree structure mismatch (" + std::to_string(diffs.size()) + " differences):\n";
+        for (const auto& d : diffs) {
+            msg += "  " + d + "\n";
+        }
+        return py_exception(tp_AssertionError, "%s", msg.c_str());
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+
 static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(2);
     const char* name_or_selector = py_tostr(py_arg(0));
@@ -711,6 +792,8 @@ void lvv_module_register() {
     // --- Complex bindings (unique control flow, kept as explicit functions) ---
     py_bind(mod, "screenshot_compare(ref_path, threshold)", py_lvv_screenshot_compare);
     py_bind(mod, "screenshot_compare_ex(ref_path, threshold, ignore_json)", py_lvv_screenshot_compare_ex);
+    py_bind(mod, "save_tree(path)",                     py_lvv_save_tree);
+    py_bind(mod, "assert_tree(ref_path)",               py_lvv_assert_tree);
     py_bind(mod, "wait(ms)",                            py_lvv_wait);
     py_bind(mod, "assert_visible(name)",                py_lvv_assert_visible);
     py_bind(mod, "assert_hidden(name)",                 py_lvv_assert_hidden);
