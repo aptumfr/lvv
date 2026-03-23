@@ -303,20 +303,36 @@ lvv.assert_false("disabled_btn", "clickable")
 Compare widget tree structure — catches missing widgets, wrong hierarchy, property changes
 that visual regression misses when the layout looks the same.
 
-### `lvv.assert_tree(ref_path) -> bool`
+### `lvv.assert_tree(ref_path, root="", include_geometry=False, tolerance=0) -> bool`
 
-Compare the current widget tree against a reference JSON file.
+Compare the widget tree against a reference JSON file.
 On first run (no reference), saves the current tree and returns `True`.
 On subsequent runs, compares and raises `AssertionError` with a detailed diff.
 
-The comparison checks: `type`, `name`, `text`, `visible`, `clickable`, and children.
-It ignores: `x`, `y`, `width`, `height`, `id`, `auto_path` (layout-dependent).
+By default compares: `type`, `name`, `text`, `visible`, `clickable`, and children.
+Ignores: `x`, `y`, `width`, `height`, `id`, `auto_path` (layout-dependent).
+Named children are matched by name (order-independent).
 
 ```python
+# Full tree, structure only
 lvv.assert_tree("home_tree.json")
+
+# Only the settings screen subtree
+lvv.assert_tree("settings_tree.json", "settings_screen")
+
+# Include geometry (exact match)
+lvv.assert_tree("home_layout.json", "", True)
+
+# Subtree with geometry and 5px tolerance
+lvv.assert_tree("settings_layout.json", "settings_screen", True, 5)
 ```
 
-Relative paths resolve against `--ref-images` directory (same as `screenshot_compare`).
+| Argument | Default | Description |
+|---|---|---|
+| `ref_path` | required | Reference JSON file (relative to `--ref-images`) |
+| `root` | `""` | Widget name for subtree (`""` = full tree) |
+| `include_geometry` | `False` | `True` to compare x/y/width/height |
+| `tolerance` | `0` | Pixel tolerance for geometry comparison |
 
 ### `lvv.save_tree(path) -> bool`
 

@@ -414,17 +414,122 @@ def save_tree(path):
     return True
 
 
-def assert_tree(ref_path):
-    """Compare current tree against a reference JSON file.
+def _normalize_node_ex(node, include_geometry=False):
+    """Normalize with optional geometry fields."""
+    j = {
+        "type": node.get("type", ""),
+        "name": node.get("name", ""),
+        "text": node.get("text", ""),
+        "visible": node.get("visible", False),
+        "clickable": node.get("clickable", False),
+    }
+    if include_geometry:
+        for k in ("x", "y", "width", "height"):
+            j[k] = node.get(k, 0)
+    children = node.get("children", [])
+    if children:
+        j["children"] = [_normalize_node_ex(c, include_geometry) for c in children]
+    return j
+
+
+def _find_subtree(node, name):
+    """Find a named widget in the tree."""
+    if node.get("name") == name:
+        return node
+    for child in node.get("children", []):
+        found = _find_subtree(child, name)
+        if found:
+            return found
+    return None
+
+
+def _diff_trees_ex(expected, actual, path="", geometry_tolerance=0):
+    """Compare trees with optional geometry tolerance."""
+    diffs = []
+    label = path or (expected.get("name") or expected.get("type", "?"))
+
+    for prop in ("type", "name", "text"):
+        ev = expected.get(prop, "")
+        av = actual.get(prop, "")
+        if ev != av:
+            diffs.append(f"{label}: property '{prop}' changed: '{ev}' -> '{av}'")
+
+    for prop in ("visible", "clickable"):
+        ev = expected.get(prop, False)
+        av = actual.get(prop, False)
+        if ev != av:
+            diffs.append(f"{label}: property '{prop}' changed: {ev} -> {av}")
+
+    for prop in ("x", "y", "width", "height"):
+        if prop not in expected:
+            continue
+        ev = expected.get(prop, 0)
+        av = actual.get(prop, 0)
+        if abs(ev - av) > geometry_tolerance:
+            msg = f"{label}: geometry '{prop}' changed: {ev} -> {av}"
+            if geometry_tolerance > 0:
+                msg += f" (tolerance: {geometry_tolerance})"
+            diffs.append(msg)
+
+    ec = expected.get("children", [])
+    ac = actual.get("children", [])
+
+    actual_by_name = {}
+    for i, c in enumerate(ac):
+        n = c.get("name", "")
+        if n:
+            actual_by_name[n] = i
+    actual_matched = [False] * len(ac)
+
+    for i, e_child in enumerate(ec):
+        e_name = e_child.get("name", "")
+        child_label = f"{label}/{e_name or e_child.get('type', '?')}"
+
+        if e_name and e_name in actual_by_name:
+            j = actual_by_name[e_name]
+            actual_matched[j] = True
+            diffs.extend(_diff_trees_ex(e_child, ac[j], child_label, geometry_tolerance))
+        elif i < len(ac) and not actual_matched[i]:
+            actual_matched[i] = True
+            diffs.extend(_diff_trees_ex(e_child, ac[i], child_label, geometry_tolerance))
+        else:
+            diffs.append(f"{label}: missing child '{e_name or e_child.get('type', '?')}'")
+
+    for i, a_child in enumerate(ac):
+        if not actual_matched[i]:
+            n = a_child.get("name") or a_child.get("type", "?")
+            diffs.append(f"{label}: extra child '{n}'")
+
+    return diffs
+
+
+def assert_tree(ref_path, root="", include_geometry=False, tolerance=0):
+    """Compare widget tree against a reference JSON file.
     On first run (no reference), saves the current tree and passes.
-    Relative paths resolve against LVV_REF_IMAGES (same as screenshot_compare)."""
-    # Resolve relative paths against ref_images dir
+
+    Args:
+        ref_path: Path to reference JSON file
+        root: Widget name for subtree ("" = full tree)
+        include_geometry: 1 to include x/y/width/height, 0 to skip
+        tolerance: Pixel tolerance for geometry comparison
+    """
+    if tolerance < 0:
+        raise ValueError("geometry tolerance must be >= 0")
+
     if ref_path and ref_path[0] != '/':
         ref_dir = os.environ.get("LVV_REF_IMAGES", "ref_images")
         ref_path = os.path.join(ref_dir, ref_path)
 
     tree = json.loads(get_tree())
-    actual = _normalize_node(tree)
+
+    # Find subtree if root specified
+    node = tree
+    if root:
+        node = _find_subtree(tree, root)
+        if not node:
+            raise RuntimeError(f"Subtree root '{root}' not found")
+
+    actual = _normalize_node_ex(node, include_geometry)
 
     try:
         with open(ref_path) as f:
@@ -435,7 +540,7 @@ def assert_tree(ref_path):
             json.dump(actual, f, indent=2)
         return True
 
-    diffs = _diff_trees(expected, actual)
+    diffs = _diff_trees_ex(expected, actual, geometry_tolerance=tolerance)
     if not diffs:
         return True
     msg = f"Tree structure mismatch ({len(diffs)} differences):\n"

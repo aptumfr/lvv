@@ -133,6 +133,76 @@ TEST_CASE("diff_trees handles named sibling reorder with property change") {
     CHECK(diffs[0].find("visible") != std::string::npos);
 }
 
+// --- Subtree ---
+
+TEST_CASE("find_subtree finds by name") {
+    auto root = make_widget("obj", "screen");
+    auto panel = make_widget("obj", "panel");
+    panel.children.push_back(make_widget("button", "btn_ok"));
+    root.children.push_back(panel);
+
+    auto* found = find_subtree(root, "btn_ok");
+    REQUIRE(found != nullptr);
+    CHECK(found->name == "btn_ok");
+}
+
+TEST_CASE("find_subtree returns nullptr when not found") {
+    auto root = make_widget("obj", "screen");
+    CHECK(find_subtree(root, "nonexistent") == nullptr);
+}
+
+// --- Geometry ---
+
+TEST_CASE("normalize_tree includes geometry when requested") {
+    auto w = make_widget("obj", "test");
+    w.x = 100; w.y = 200; w.width = 300; w.height = 400;
+
+    auto without = normalize_tree(w);
+    CHECK_FALSE(without.contains("x"));
+
+    TreeSnapshotOptions opts;
+    opts.include_geometry = true;
+    auto with_geo = normalize_tree(w, opts);
+    CHECK(with_geo["x"] == 100);
+    CHECK(with_geo["y"] == 200);
+    CHECK(with_geo["width"] == 300);
+    CHECK(with_geo["height"] == 400);
+}
+
+TEST_CASE("diff_trees detects geometry change") {
+    TreeSnapshotOptions opts;
+    opts.include_geometry = true;
+
+    auto w1 = make_widget("obj", "test");
+    w1.x = 100; w1.y = 200;
+    auto w2 = make_widget("obj", "test");
+    w2.x = 150; w2.y = 200;
+
+    auto diffs = diff_trees(normalize_tree(w1, opts), normalize_tree(w2, opts));
+    REQUIRE(diffs.size() == 1);
+    CHECK(diffs[0].find("x") != std::string::npos);
+    CHECK(diffs[0].find("100") != std::string::npos);
+    CHECK(diffs[0].find("150") != std::string::npos);
+}
+
+TEST_CASE("diff_trees respects geometry tolerance") {
+    TreeSnapshotOptions opts;
+    opts.include_geometry = true;
+
+    auto w1 = make_widget("obj", "test");
+    w1.x = 100; w1.y = 200; w1.width = 80; w1.height = 40;
+    auto w2 = make_widget("obj", "test");
+    w2.x = 103; w2.y = 198; w2.width = 80; w2.height = 40;
+
+    // Without tolerance: 2 diffs (x and y)
+    auto diffs_strict = diff_trees(normalize_tree(w1, opts), normalize_tree(w2, opts));
+    CHECK(diffs_strict.size() == 2);
+
+    // With tolerance of 5: no diffs (3 and 2 are within ±5)
+    auto diffs_tolerant = diff_trees(normalize_tree(w1, opts), normalize_tree(w2, opts), "", 5);
+    CHECK(diffs_tolerant.empty());
+}
+
 TEST_CASE("diff_trees recursive child comparison") {
     auto root1 = make_widget("obj", "screen");
     auto child1 = make_widget("obj", "panel");

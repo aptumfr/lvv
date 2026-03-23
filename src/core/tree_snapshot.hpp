@@ -7,18 +7,24 @@
 
 namespace lvv {
 
+struct TreeSnapshotOptions {
+    bool include_geometry = false;
+    int geometry_tolerance = 0;  // absolute pixel tolerance for x/y/width/height
+};
+
 /// Normalize a widget tree for structural comparison.
-/// Strips volatile fields (id, x, y, width, height, auto_path) and keeps
-/// only structural properties (type, name, text, visible, clickable, children).
-nlohmann::json normalize_tree(const WidgetInfo& root);
+/// Strips volatile fields (id, auto_path) and optionally includes geometry.
+nlohmann::json normalize_tree(const WidgetInfo& root,
+                               const TreeSnapshotOptions& opts = {});
+
+/// Find a named widget in the tree. Returns nullptr if not found.
+const WidgetInfo* find_subtree(const WidgetInfo& root, const std::string& name);
 
 /// Compare two normalized trees and return a list of differences.
-/// Each difference is a human-readable string like:
-///   "home_screen/nav_row: missing child 'btn_extra'"
-///   "settings_screen: property 'visible' changed: true -> false"
 /// Returns an empty vector if trees are identical.
 std::vector<std::string> diff_trees(const nlohmann::json& expected,
                                      const nlohmann::json& actual,
-                                     const std::string& path = "");
+                                     const std::string& path = "",
+                                     int geometry_tolerance = 0);
 
 } // namespace lvv
