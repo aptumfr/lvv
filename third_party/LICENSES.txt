@@ -1,6 +1,7 @@
 Used libraries:
 
 CLI11 2.4.2 — BSD-3-Clause — https://github.com/CLIUtils/CLI11
+doctest 2.4.11 — MIT — https://github.com/doctest/doctest
 Crow 3.1 — BSD-3-Clause — https://github.com/CrowCpp/Crow
 nlohmann/json 3.12.0 — MIT — https://github.com/nlohmann/json
 PocketPy 2.1.6 — MIT — https://github.com/pocketpy/pocketpy

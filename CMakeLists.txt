@@ -80,14 +80,9 @@ install(DIRECTORY web/dist/ DESTINATION share/lvv/web
 option(LVV_BUILD_TESTS "Build unit tests" ON)
 
 if(LVV_BUILD_TESTS)
-    include(FetchContent)
-    FetchContent_Declare(
-        doctest
-        GIT_REPOSITORY https://github.com/doctest/doctest.git
-        GIT_TAG v2.4.11
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(doctest)
+    # doctest (header-only, vendored in third_party)
+    add_library(doctest INTERFACE)
+    target_include_directories(doctest INTERFACE third_party)
 
     add_executable(lvv_tests
         tests/test_widget_tree.cpp
@@ -112,7 +107,7 @@ if(LVV_BUILD_TESTS)
     target_link_libraries(lvv_tests PRIVATE
         stb
         JPEG::JPEG
-        doctest::doctest
+        doctest
     )
 
     include(CTest)

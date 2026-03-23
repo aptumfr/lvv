@@ -35,7 +35,7 @@ export function useWebSocket(url: string, onDisconnect?: () => void) {
         createImageBitmap(event.data).then(bitmap => {
           if (seq !== frameSeq.current) { bitmap.close(); return; } // stale
           setLastFrame(prev => { prev?.close(); return bitmap; });
-        }).catch(() => {});
+        }).catch((e) => { console.error('Frame decode failed:', e); });
       }
     };
 
