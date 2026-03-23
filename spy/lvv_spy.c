@@ -13,7 +13,8 @@
 #include "lvv_spy.h"
 
 #include <lvgl.h>
-#include <string.h>  /* strstr, strtol — universally available, even on bare-metal */
+#include <string.h>  /* strstr — universally available, even on bare-metal */
+#include <stdlib.h>  /* strtol — needed for JSON int parsing */
 
 /* LVGL private headers for strip-based rendering and log globals */
 #include "src/draw/lv_draw_private.h"

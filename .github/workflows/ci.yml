@@ -9,7 +9,10 @@ jobs:
   unit-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libjpeg-turbo8-dev libboost-system-dev libasio-dev
 
       - name: Build
         run: |
@@ -23,23 +26,24 @@ jobs:
   integration-tests:
     runs-on: ubuntu-24.04
     steps:
-      # Check out all three repos as siblings (same layout as local dev)
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: lvv
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: lvgl/lvgl
-          ref: master
+          ref: v9.5.0
           path: lvgl
 
-      # Adjust this to your lv:: wrapper repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          repository: aspect-apps/lv
-          ref: main
+          repository: aptumfr/lv
+          ref: master
           path: lv
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libjpeg-turbo8-dev libboost-system-dev libasio-dev libegl-dev libx11-dev
 
       - name: Build lvv
         run: |
@@ -60,20 +64,25 @@ jobs:
 
       - name: Run integration tests
         run: |
-          lvv/example/build/demo_headless &
+          lvv/example/build/demo_headless > demo.log 2>&1 &
+          DEMO_PID=$!
           for i in $(seq 1 20); do
             lvv/build/lvv --port 5555 ping && break
-            [ $i -eq 20 ] && { echo "Spy not ready"; exit 1; }
+            if ! kill -0 $DEMO_PID 2>/dev/null; then
+              echo "demo_headless crashed:"
+              cat demo.log
+              exit 1
+            fi
+            [ $i -eq 20 ] && { echo "Spy not ready after 10s. Demo log:"; cat demo.log; exit 1; }
             sleep 0.5
           done
           lvv/build/lvv --port 5555 run \
             --output results.xml \
             lvv/tests/example_tests/
 
-      - name: Publish test results
-        uses: dorny/test-reporter@v1
+      - name: Upload test results
+        uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: Integration Tests
+          name: test-results
           path: results.xml
-          reporter: java-junit

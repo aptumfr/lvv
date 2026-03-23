@@ -16,13 +16,18 @@ if(LVGL_DIR STREQUAL "")
     set(LVGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lvgl")
 endif()
 
-# Build LVGL (it finds lv_conf.h in its parent dir — the lv project has it)
-# We need lv_conf.h to be visible. Set the include path explicitly.
+# Tell LVGL to use the example's lv_conf.h (has LV_USE_OBJ_NAME, display drivers, etc.)
+set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lv_conf.h" CACHE STRING "" FORCE)
+
+# Build LVGL (disable demos/examples — not needed for lvv examples)
+set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 if(NOT TARGET lvgl)
     add_subdirectory(${LVGL_DIR} ${CMAKE_BINARY_DIR}/lvgl)
 endif()
 
-# Make lv_conf.h visible (it's in the lv project root)
+# Make lv:: wrapper headers and lv_conf.h visible
+target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(lvgl PUBLIC ${LV_CPP_DIR})
 
 # lv:: C++ wrapper (header-only)
