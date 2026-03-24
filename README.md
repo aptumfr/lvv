@@ -2,6 +2,8 @@
 
 LVV is a test automation tool for [LVGL](https://lvgl.io/) applications. It connects to an LVGL target (running the LVV Spy), provides widget inspection, interaction, visual regression testing, and a web UI for interactive debugging.
 
+![LVV Web UI](docs/lvv.png)
+
 ## Architecture
 
 ```
