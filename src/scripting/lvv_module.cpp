@@ -16,22 +16,22 @@
 
 namespace lvv {
 
-// --- Module-level state ---
-static Protocol* g_protocol = nullptr;
-static nlohmann::json g_object_map;
-static std::string g_ref_images_dir = "ref_images";
-static double g_default_threshold = 0.1;
+// --- Per-VM context (replaces file-scope globals) ---
+// Accessed via PocketPy's py_getvmctx(), which is thread-local to the VM.
+// Set by ScriptEngine before script execution via lvv_module_set_context().
 
-void lvv_module_set_protocol(Protocol* protocol) { g_protocol = protocol; }
-void lvv_module_reset_state() { g_object_map.clear(); }
-void lvv_module_set_defaults(const std::string& ref_dir, double threshold) {
-    g_ref_images_dir = ref_dir;
-    g_default_threshold = threshold;
+static LvvModuleContext& ctx() {
+    auto* c = static_cast<LvvModuleContext*>(py_getvmctx());
+    return *c;
 }
 
+void lvv_module_set_context(LvvModuleContext* c) { py_setvmctx(c); }
+void lvv_module_reset_state() { ctx().object_map.clear(); }
+
 static std::string resolve_name(const char* name) {
-    if (!g_object_map.empty() && g_object_map.contains(name)) {
-        return g_object_map[name].get<std::string>();
+    auto& om = ctx().object_map;
+    if (!om.empty() && om.contains(name)) {
+        return om[name].get<std::string>();
     }
     return name;
 }
@@ -46,7 +46,7 @@ static bool check_protocol() {
         py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         return false;
     }
-    if (!g_protocol || !g_protocol->is_connected()) {
+    if (!ctx().protocol || !ctx().protocol->is_connected()) {
         py_exception(tp_RuntimeError, "Not connected to target");
         return false;
     }
@@ -131,7 +131,7 @@ static void ret_widget_or_none(const std::optional<WidgetInfo>& w) {
 // This normalization must stay consistent across all assertion helpers.
 static std::string get_prop_value(const std::string& name, const char* prop,
                                   std::string& err_out) {
-    auto props = g_protocol->get_props(name, prop);
+    auto props = ctx().protocol->get_props(name, prop);
     if (!props.contains(prop)) {
         err_out = "Widget '" + name + "' has no property '" + prop + "'";
         return {};
@@ -146,13 +146,13 @@ static std::string get_prop_value(const std::string& name, const char* prop,
 static std::string resolve_ref_path(const char* ref_path_arg) {
     std::string ref_path = ref_path_arg;
     if (!ref_path.empty() && ref_path[0] != '/')
-        ref_path = g_ref_images_dir + "/" + ref_path;
+        ref_path = ctx().ref_images_dir + "/" + ref_path;
     return ref_path;
 }
 
 // Helper: screenshot compare implementation
 static bool do_screenshot_compare(const std::string& ref_path, CompareOptions& opts) {
-    auto actual = g_protocol->screenshot();
+    auto actual = ctx().protocol->screenshot();
     if (!actual.valid()) throw std::runtime_error("Failed to capture screenshot");
 
     auto parent = std::filesystem::path(ref_path).parent_path();
@@ -171,7 +171,7 @@ static bool do_screenshot_compare(const std::string& ref_path, CompareOptions& o
 
 // Helper: find visible by selector or name
 static std::optional<WidgetInfo> find_visible_by_selector(const WidgetSelector& sel) {
-    auto tree_json = g_protocol->get_tree_cached();
+    auto tree_json = ctx().protocol->get_tree_cached();
     WidgetTree tree;
     tree.update(tree_json);
     auto widget = tree.find_by_selector(sel);
@@ -180,7 +180,7 @@ static std::optional<WidgetInfo> find_visible_by_selector(const WidgetSelector& 
 }
 
 static std::optional<WidgetInfo> find_visible_by_name(const std::string& name) {
-    auto widget = g_protocol->find(name);
+    auto widget = ctx().protocol->find(name);
     if (widget && widget->visible) return widget;
     return std::nullopt;
 }
@@ -201,54 +201,54 @@ static std::optional<WidgetInfo> find_visible_by_name(const std::string& name) {
 // -- Connection & info --
 
 constexpr auto fn_ping = [](py_StackRef) {
-    py_newstr(py_retval(), g_protocol->ping().c_str());
+    py_newstr(py_retval(), ctx().protocol->ping().c_str());
 };
 // -- Input --
 
 constexpr auto fn_click = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->click(resolve_name(py_tostr(py_arg(0)))));
+    py_newbool(py_retval(), ctx().protocol->click(resolve_name(py_tostr(py_arg(0)))));
 };
 constexpr auto fn_click_at = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->click_at(py_toint(py_arg(0)), py_toint(py_arg(1))));
+    py_newbool(py_retval(), ctx().protocol->click_at(py_toint(py_arg(0)), py_toint(py_arg(1))));
 };
 constexpr auto fn_press = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->press(py_toint(py_arg(0)), py_toint(py_arg(1))));
+    py_newbool(py_retval(), ctx().protocol->press(py_toint(py_arg(0)), py_toint(py_arg(1))));
 };
 constexpr auto fn_release = [](py_StackRef) {
-    py_newbool(py_retval(), g_protocol->release());
+    py_newbool(py_retval(), ctx().protocol->release());
 };
 constexpr auto fn_move_to = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->move_to(py_toint(py_arg(0)), py_toint(py_arg(1))));
+    py_newbool(py_retval(), ctx().protocol->move_to(py_toint(py_arg(0)), py_toint(py_arg(1))));
 };
 constexpr auto fn_swipe = [](py_StackRef argv) {
     const int x1 = py_toint(py_arg(0)), y1 = py_toint(py_arg(1));
     const int x2 = py_toint(py_arg(2)), y2 = py_toint(py_arg(3));
     const int duration = py_toint(py_arg(4));
-    py_newbool(py_retval(), g_protocol->swipe(x1, y1, x2, y2, duration));
+    py_newbool(py_retval(), ctx().protocol->swipe(x1, y1, x2, y2, duration));
 };
 constexpr auto fn_type_text = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->type_text(py_tostr(py_arg(0))));
+    py_newbool(py_retval(), ctx().protocol->type_text(py_tostr(py_arg(0))));
 };
 constexpr auto fn_key = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->key(py_tostr(py_arg(0))));
+    py_newbool(py_retval(), ctx().protocol->key(py_tostr(py_arg(0))));
 };
 // -- Screenshots --
 
 constexpr auto fn_screenshot = [](py_StackRef argv) {
-    auto img = g_protocol->screenshot();
+    auto img = ctx().protocol->screenshot();
     if (!img.valid()) throw std::runtime_error("Failed to capture screenshot");
     py_newbool(py_retval(), save_png(img, py_tostr(py_arg(0))));
 };
 // -- Inspection --
 
 constexpr auto fn_get_tree = [](py_StackRef) {
-    py_newstr(py_retval(), g_protocol->get_tree().dump().c_str());
+    py_newstr(py_retval(), ctx().protocol->get_tree().dump().c_str());
 };
 constexpr auto fn_get_props = [](py_StackRef argv) {
-    py_newstr(py_retval(), g_protocol->get_props(resolve_name(py_tostr(py_arg(0)))).dump().c_str());
+    py_newstr(py_retval(), ctx().protocol->get_props(resolve_name(py_tostr(py_arg(0)))).dump().c_str());
 };
 constexpr auto fn_screen_info = [](py_StackRef) {
-    auto info = g_protocol->get_screen_info();
+    auto info = ctx().protocol->get_screen_info();
     const nlohmann::json j = {{"width", info.width}, {"height", info.height},
                               {"color_format", info.color_format}};
     py_newstr(py_retval(), j.dump().c_str());
@@ -256,39 +256,39 @@ constexpr auto fn_screen_info = [](py_StackRef) {
 // -- Log capture & metrics --
 
 constexpr auto fn_set_log_capture = [](py_StackRef argv) {
-    py_newbool(py_retval(), g_protocol->set_log_capture(py_tobool(py_arg(0))));
+    py_newbool(py_retval(), ctx().protocol->set_log_capture(py_tobool(py_arg(0))));
 };
 constexpr auto fn_get_logs = [](py_StackRef) {
-    py_newstr(py_retval(), g_protocol->get_logs().dump().c_str());
+    py_newstr(py_retval(), ctx().protocol->get_logs().dump().c_str());
 };
 constexpr auto fn_clear_logs = [](py_StackRef) {
-    py_newbool(py_retval(), g_protocol->clear_logs());
+    py_newbool(py_retval(), ctx().protocol->clear_logs());
 };
 constexpr auto fn_get_metrics = [](py_StackRef) {
-    py_newstr(py_retval(), g_protocol->get_metrics().dump().c_str());
+    py_newstr(py_retval(), ctx().protocol->get_metrics().dump().c_str());
 };
 constexpr auto fn_long_press = [](py_StackRef argv) {
     const int x = py_toint(py_arg(0)), y = py_toint(py_arg(1));
     const int duration = py_toint(py_arg(2));
-    py_newbool(py_retval(), g_protocol->long_press(x, y, duration, is_cancelled));
+    py_newbool(py_retval(), ctx().protocol->long_press(x, y, duration, is_cancelled));
 };
 constexpr auto fn_drag = [](py_StackRef argv) {
     const int x1 = py_toint(py_arg(0)), y1 = py_toint(py_arg(1));
     const int x2 = py_toint(py_arg(2)), y2 = py_toint(py_arg(3));
     const int duration = py_toint(py_arg(4));
-    py_newbool(py_retval(), g_protocol->drag(x1, y1, x2, y2, duration, 10, is_cancelled));
+    py_newbool(py_retval(), ctx().protocol->drag(x1, y1, x2, y2, duration, 10, is_cancelled));
 };
 constexpr auto fn_find = [](py_StackRef argv) {
-    ret_widget_or_none(g_protocol->find(resolve_name(py_tostr(py_arg(0)))));
+    ret_widget_or_none(ctx().protocol->find(resolve_name(py_tostr(py_arg(0)))));
 };
 constexpr auto fn_find_at = [](py_StackRef argv) {
-    auto tree_json = g_protocol->get_tree_cached();
+    auto tree_json = ctx().protocol->get_tree_cached();
     WidgetTree tree;
     tree.update(tree_json);
     ret_widget_or_none(tree.find_at(py_toint(py_arg(0)), py_toint(py_arg(1))));
 };
 constexpr auto fn_widget_coords = [](py_StackRef argv) {
-    auto w = g_protocol->find(resolve_name(py_tostr(py_arg(0))));
+    auto w = ctx().protocol->find(resolve_name(py_tostr(py_arg(0))));
     if (!w) throw std::runtime_error(std::string("Widget '") + py_tostr(py_arg(0)) + "' not found");
     py_newtuple(py_retval(), 4);
     py_TValue* d = py_tuple_data(py_retval());
@@ -296,7 +296,7 @@ constexpr auto fn_widget_coords = [](py_StackRef argv) {
     py_newint(&d[2], w->width); py_newint(&d[3], w->height);
 };
 constexpr auto fn_get_all_widgets = [](py_StackRef) {
-    auto tree_json = g_protocol->get_tree_cached();
+    auto tree_json = ctx().protocol->get_tree_cached();
     WidgetTree tree;
     tree.update(tree_json);
     ret_widget_array(tree.flatten());
@@ -312,7 +312,7 @@ static bool py_lvv_find_by(int argc, py_StackRef argv) {
     if (!err.empty())
         return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
     try {
-        auto tree_json = g_protocol->get_tree_cached();
+        auto tree_json = ctx().protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
         ret_widget_or_none(tree.find_by_selector(sel));
@@ -328,7 +328,7 @@ static bool py_lvv_find_all_by(int argc, py_StackRef argv) {
     if (!err.empty())
         return py_exception(tp_ValueError, "Invalid selector: %s", err.c_str());
     try {
-        auto tree_json = g_protocol->get_tree_cached();
+        auto tree_json = ctx().protocol->get_tree_cached();
         WidgetTree tree;
         tree.update(tree_json);
         ret_widget_array(tree.find_all_by_selector(sel));
@@ -344,7 +344,7 @@ static bool py_lvv_screenshot_compare(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(2);
     if (!check_protocol()) return false;
     double threshold = py_tofloat(py_arg(1));
-    if (threshold <= 0.0) threshold = g_default_threshold;
+    if (threshold <= 0.0) threshold = ctx().default_threshold;
     auto ref_path = resolve_ref_path(py_tostr(py_arg(0)));
     try {
         CompareOptions opts;
@@ -359,7 +359,7 @@ static bool py_lvv_screenshot_compare_ex(int argc, py_StackRef argv) {
     PY_CHECK_ARGC(3);
     if (!check_protocol()) return false;
     double threshold = py_tofloat(py_arg(1));
-    if (threshold <= 0.0) threshold = g_default_threshold;
+    if (threshold <= 0.0) threshold = ctx().default_threshold;
     auto ref_path = resolve_ref_path(py_tostr(py_arg(0)));
     try {
         CompareOptions opts;
@@ -401,7 +401,7 @@ static bool py_lvv_assert_visible(int argc, py_StackRef argv) {
     const auto name = resolve_name(py_tostr(py_arg(0)));
     if (!check_protocol()) return false;
     try {
-        auto w = g_protocol->find(name);
+        auto w = ctx().protocol->find(name);
         if (!w || !w->visible)
             return py_exception(tp_AssertionError, "Widget '%s' is not visible", name.c_str());
         py_newbool(py_retval(), true);
@@ -414,7 +414,7 @@ static bool py_lvv_assert_hidden(int argc, py_StackRef argv) {
     const auto name = resolve_name(py_tostr(py_arg(0)));
     if (!check_protocol()) return false;
     try {
-        auto w = g_protocol->find(name);
+        auto w = ctx().protocol->find(name);
         if (w && w->visible)
             return py_exception(tp_AssertionError, "Widget '%s' is visible (expected hidden)", name.c_str());
         py_newbool(py_retval(), true);
@@ -530,8 +530,8 @@ static bool py_lvv_load_object_map(int argc, py_StackRef argv) {
     try {
         std::ifstream f(path);
         if (!f.is_open()) return py_exception(tp_RuntimeError, "Cannot open object map: %s", path);
-        g_object_map = nlohmann::json::parse(f);
-        py_newint(py_retval(), static_cast<int>(g_object_map.size()));
+        ctx().object_map = nlohmann::json::parse(f);
+        py_newint(py_retval(), static_cast<int>(ctx().object_map.size()));
         return true;
     } catch (const std::exception& e) {
         return py_exception(tp_RuntimeError, "Invalid object map: %s", e.what());
@@ -544,7 +544,7 @@ static bool py_lvv_save_tree(int argc, py_StackRef argv) {
     const char* path = py_tostr(py_arg(0));
     if (!check_protocol()) return false;
     try {
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = ctx().protocol->get_tree();
         WidgetTree tree;
         tree.update(tree_json);
         auto normalized = normalize_tree(tree.root());
@@ -569,7 +569,7 @@ static bool do_assert_tree(const char* ref_path_arg, const char* root_name,
 
     std::string ref_path = ref_path_arg;
     if (!ref_path.empty() && ref_path[0] != '/') {
-        ref_path = g_ref_images_dir + "/" + ref_path;
+        ref_path = ctx().ref_images_dir + "/" + ref_path;
     }
 
     TreeSnapshotOptions opts;
@@ -577,7 +577,7 @@ static bool do_assert_tree(const char* ref_path_arg, const char* root_name,
     opts.geometry_tolerance = geometry_tolerance;
 
     try {
-        auto tree_json = g_protocol->get_tree();
+        auto tree_json = ctx().protocol->get_tree();
         WidgetTree tree;
         tree.update(tree_json);
 
@@ -660,13 +660,13 @@ static bool py_lvv_find_with_retry(int argc, py_StackRef argv) {
             return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         try {
             if (is_selector) {
-                auto tree_json = g_protocol->get_tree_cached();
+                auto tree_json = ctx().protocol->get_tree_cached();
                 WidgetTree tree;
                 tree.update(tree_json);
                 auto widget = tree.find_by_selector(sel);
                 if (widget) { ret_widget_json(*widget); return true; }
             } else {
-                auto widget = g_protocol->find(resolve_name(name_or_selector));
+                auto widget = ctx().protocol->find(resolve_name(name_or_selector));
                 if (widget) { ret_widget_json(*widget); return true; }
             }
         } catch (const widget_not_found&) {
@@ -733,13 +733,13 @@ static bool py_lvv_wait_until(int argc, py_StackRef argv) {
         if (is_cancelled())
             return py_exception(tp_RuntimeError, "Script cancelled (timeout)");
         try {
-            auto widget = g_protocol->find(name);
+            auto widget = ctx().protocol->find(name);
             if (widget) {
                 if (std::string(prop) == "text") {
                     if (widget->text == expected) { py_newbool(py_retval(), true); return true; }
                     last_value = widget->text;
                 } else {
-                    auto props = g_protocol->get_props(name, prop);
+                    auto props = ctx().protocol->get_props(name, prop);
                     if (props.contains(prop)) {
                         std::string val = props[prop].dump();
                         if (val.size() >= 2 && val.front() == '"')

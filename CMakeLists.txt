@@ -39,6 +39,9 @@ set(LVV_SOURCES
     src/server/api_routes.cpp
     src/server/ws_handler.cpp
     src/app/app.cpp
+    src/app/app_commands.cpp
+    src/app/app_test_runner.cpp
+    src/app/app_server.cpp
     src/app/config.cpp
 )
 

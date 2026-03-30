@@ -9,6 +9,10 @@
 
 namespace lvv {
 
+// Maps the current VM thread to its ScriptEngine for cancellation checking.
+// Thread-local because PocketPy's pk_current_vm is also thread-local.
+// Only one ScriptEngine exists per process (see LvvModuleContext invariant),
+// but thread_local is correct if that ever changes.
 static thread_local ScriptEngine* s_active_engine = nullptr;
 
 void ScriptEngine::set_active(ScriptEngine* engine) {
@@ -19,11 +23,10 @@ ScriptEngine* ScriptEngine::active() {
     return s_active_engine;
 }
 
-// Captured output from PocketPy print callback
-static std::string s_captured_output;
-
+// PocketPy print callback — appends to the current VM's captured output buffer
 static void capture_print(const char* text) {
-    s_captured_output += text;
+    auto* ctx = static_cast<LvvModuleContext*>(py_getvmctx());
+    if (ctx) ctx->captured_output += text;
 }
 
 ScriptEngine::ScriptEngine() {
@@ -45,6 +48,7 @@ void ScriptEngine::thread_main() {
     // Initialize PocketPy on THIS thread (pk_current_vm is _Thread_local)
     py_initialize();
     lvv_module_register();
+    lvv_module_set_context(&module_ctx_);
 
     while (true) {
         std::unique_lock lock(mutex_);
@@ -60,7 +64,7 @@ void ScriptEngine::thread_main() {
 
         // Run outside the lock — reset state for isolation
         s_active_engine = this;
-        s_captured_output.clear();
+        module_ctx_.captured_output.clear();
         lvv_module_reset_state();
 
         py_Callbacks* cb = py_callbacks();
@@ -88,7 +92,7 @@ void ScriptEngine::thread_main() {
             py_clearexc(nullptr);
             result = {false, error_msg};
         } else {
-            result = {true, s_captured_output};
+            result = {true, module_ctx_.captured_output};
         }
 
         cb->print = old_print;
@@ -104,7 +108,12 @@ void ScriptEngine::thread_main() {
 }
 
 void ScriptEngine::set_protocol(Protocol* protocol) {
-    lvv_module_set_protocol(protocol);
+    module_ctx_.protocol = protocol;
+}
+
+void ScriptEngine::set_visual_defaults(const std::string& ref_dir, double threshold) {
+    module_ctx_.ref_images_dir = ref_dir;
+    module_ctx_.default_threshold = threshold;
 }
 
 std::pair<bool, std::string> ScriptEngine::run_file(const std::string& path) {

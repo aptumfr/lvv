@@ -8,9 +8,9 @@
 #include <thread>
 #include <utility>
 
-namespace lvv {
+#include "lvv_module.hpp"
 
-class Protocol;
+namespace lvv {
 
 /// ScriptEngine runs PocketPy on a dedicated thread because
 /// pk_current_vm is _Thread_local — all VM calls must happen
@@ -26,6 +26,9 @@ public:
 
     /// Set the active protocol for Python bindings to use
     void set_protocol(Protocol* protocol);
+
+    /// Set visual regression defaults (ref images dir, diff threshold)
+    void set_visual_defaults(const std::string& ref_dir, double threshold);
 
     /// Run a Python file, returns (success, output/error)
     std::pair<bool, std::string> run_file(const std::string& path);
@@ -62,6 +65,9 @@ private:
     bool shutdown_ = false;
     double timeout_seconds_ = 30.0;
     std::atomic<bool> cancelled_{false};
+
+    // Per-VM context for the lvv Python module (set before script execution)
+    LvvModuleContext module_ctx_;
 };
 
 } // namespace lvv
