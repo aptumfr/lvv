@@ -77,7 +77,16 @@ def screen_info():
 # ---- Input ----
 
 def click(name):
-    return _post("/api/click", {"name": _resolve(name)}).get("success", False)
+    resp = _post("/api/click", {"name": _resolve(name)})
+    if resp.get("success") and resp.get("received") is False:
+        raise AssertionError(
+            f"Click on '{name}' was intercepted by another widget")
+    return resp.get("success", False)
+
+
+def sync():
+    """Wait for LVGL to finish processing all pending events and redraws."""
+    _post("/api/sync")
 
 
 def click_at(x, y):

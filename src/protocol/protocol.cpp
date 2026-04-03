@@ -121,7 +121,21 @@ bool Protocol::fire_and_forget(const nlohmann::json& cmd) {
 }
 
 bool Protocol::click(const std::string& selector) {
-    return fire_and_forget({{"cmd", "click"}, {"name", selector}});
+    try {
+        auto resp = send_command({{"cmd", "click"}, {"name", selector}});
+        invalidate_tree_cache();
+        if (resp.contains("received") && !resp["received"].get<bool>()) {
+            throw click_not_received(
+                "Click on '" + selector + "' was intercepted by another widget");
+        }
+        return true;
+    } catch (const widget_not_found&) {
+        return false;
+    }
+}
+
+void Protocol::sync() {
+    send_command({{"cmd", "sync"}});
 }
 
 bool Protocol::click_at(int x, int y) {

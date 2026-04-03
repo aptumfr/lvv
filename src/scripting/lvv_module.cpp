@@ -205,8 +205,24 @@ constexpr auto fn_ping = [](py_StackRef) {
 };
 // -- Input --
 
-constexpr auto fn_click = [](py_StackRef argv) {
-    py_newbool(py_retval(), ctx().protocol->click(resolve_name(py_tostr(py_arg(0)))));
+// click is an explicit binding (not py_protocol_cmd) because click_not_received
+// should become AssertionError, not RuntimeError.
+static bool py_lvv_click(int argc, py_StackRef argv) {
+    PY_CHECK_ARGC(1);
+    if (!check_protocol()) return false;
+    try {
+        const auto name = resolve_name(py_tostr(py_arg(0)));
+        py_newbool(py_retval(), ctx().protocol->click(name));
+        return true;
+    } catch (const click_not_received& e) {
+        return py_exception(tp_AssertionError, "%s", e.what());
+    } catch (const std::exception& e) {
+        return py_exception(tp_RuntimeError, "%s", e.what());
+    }
+}
+constexpr auto fn_sync = [](py_StackRef) {
+    ctx().protocol->sync();
+    py_newnone(py_retval());
 };
 constexpr auto fn_click_at = [](py_StackRef argv) {
     py_newbool(py_retval(), ctx().protocol->click_at(py_toint(py_arg(0)), py_toint(py_arg(1))));
@@ -776,8 +792,9 @@ void lvv_module_register() {
     py_bind(mod, "screen_info()",                       py_protocol_cmd<fn_screen_info>);
 
     // Input
-    py_bind(mod, "click(name)",                         py_protocol_cmd<fn_click>);
+    py_bind(mod, "click(name)",                         py_lvv_click);
     py_bind(mod, "click_at(x, y)",                      py_protocol_cmd<fn_click_at>);
+    py_bind(mod, "sync()",                              py_protocol_cmd<fn_sync>);
     py_bind(mod, "press(x, y)",                         py_protocol_cmd<fn_press>);
     py_bind(mod, "release()",                           py_protocol_cmd<fn_release>);
     py_bind(mod, "move_to(x, y)",                       py_protocol_cmd<fn_move_to>);

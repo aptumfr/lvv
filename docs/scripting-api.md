@@ -122,10 +122,33 @@ print(info["width"], info["height"], info["color_format"])
 
 ### `lvv.click(name) -> bool`
 
-Click a widget by name.
+Click a widget by name. Verifies the click actually reached the target widget — raises
+`AssertionError` if the click was intercepted by another widget (e.g. a modal dialog).
 
 ```python
 lvv.click("btn_ok")
+```
+
+### `lvv.sync()`
+
+Settle barrier: drains all immediate LVGL work caused by previous commands.
+Runs the LVGL event loop repeatedly until the widget tree is stable across
+two consecutive passes (or a safety cap of 50 iterations is reached).
+
+Does **not** wait for animations or async app transitions — use `lvv.wait_for()`
+for those.
+
+**Pattern for deterministic tests:**
+```python
+# Immediate effect (show/hide, layout change):
+lvv.click("btn_ok")
+lvv.sync()
+lvv.assert_visible("result_label")
+
+# Async transition (screen change with animation):
+lvv.click("btn_settings")
+lvv.sync()
+lvv.wait_for("settings_screen", 2000)
 ```
 
 ### `lvv.click_at(x, y) -> bool`

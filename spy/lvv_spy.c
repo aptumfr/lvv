@@ -407,6 +407,31 @@ static void serialize_widget(lv_obj_t* obj, int depth) {
     resp_append("}");
 }
 
+/* Recursive hash of a widget subtree for sync() settle detection.
+ * Covers: visibility, position, size, text, clickable state, and all descendants. */
+static uint32_t hash_widget_tree(lv_obj_t* obj) {
+    uint32_t h = 0;
+    h = h * 31 + (lv_obj_is_visible(obj) ? 1u : 0u);
+    h = h * 31 + (uint32_t)lv_obj_get_x(obj);
+    h = h * 31 + (uint32_t)lv_obj_get_y(obj);
+    h = h * 31 + (uint32_t)lv_obj_get_width(obj);
+    h = h * 31 + (uint32_t)lv_obj_get_height(obj);
+    h = h * 31 + (lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE) ? 1u : 0u);
+
+    const char* text = get_widget_text(obj);
+    if (text) {
+        for (const char* p = text; *p; p++) {
+            h = h * 31 + (uint32_t)(unsigned char)*p;
+        }
+    }
+
+    uint32_t cnt = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < cnt; i++) {
+        h = h * 31 + hash_widget_tree(lv_obj_get_child(obj, (int32_t)i));
+    }
+    return h;
+}
+
 /* ======================== Widget Finder ======================== */
 
 static lv_obj_t* find_widget_recursive(lv_obj_t* obj, const char* selector) {
@@ -531,6 +556,37 @@ static void inject_release(void) {
 static void inject_click(int x, int y) {
     inject_press(x, y);
     inject_release();
+}
+
+/* Click verification: temporary event callback to confirm a widget received the click */
+/* Check if 'child' is the same as 'parent' or a descendant of 'parent' */
+static bool is_descendant_of(lv_obj_t* child, lv_obj_t* parent) {
+    while (child) {
+        if (child == parent) return true;
+        child = lv_obj_get_parent(child);
+    }
+    return false;
+}
+
+/* Click a widget and verify the click coordinates land on the widget
+ * or one of its descendants (not intercepted by an overlapping widget).
+ * Returns: 1 = verified, 0 = intercepted by another widget */
+static int inject_click_verified(lv_obj_t* obj) {
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    int cx = (coords.x1 + coords.x2) / 2;
+    int cy = (coords.y1 + coords.y2) / 2;
+
+    /* Before clicking, check what widget LVGL would actually route the input to.
+     * lv_indev_search_obj finds the deepest visible widget at these coordinates,
+     * same algorithm LVGL's input system uses. */
+    lv_point_t pt = {cx, cy};
+    lv_obj_t* hit = lv_indev_search_obj(lv_screen_active(), &pt);
+    bool received = hit && is_descendant_of(hit, obj);
+
+    /* Always inject the click (for consistency), but report if it was intercepted */
+    inject_click(cx, cy);
+    return received ? 1 : 0;
 }
 
 static void inject_key_text(const char* text) {
@@ -750,12 +806,10 @@ static void process_command(const char* cmd) {
 
         lv_obj_t* obj = find_widget(name);
         if (obj) {
-            lv_area_t coords;
-            lv_obj_get_coords(obj, &coords);
-            int cx = (coords.x1 + coords.x2) / 2;
-            int cy = (coords.y1 + coords.y2) / 2;
-            inject_click(cx, cy);
-            resp_append("{\"success\":true}");
+            int received = inject_click_verified(obj);
+            resp_append("{\"success\":true,\"received\":");
+            resp_append_bool(received == 1);
+            resp_append("}");
         } else {
             resp_append("{\"error\":\"Widget not found\"}");
         }
@@ -881,6 +935,41 @@ static void process_command(const char* cmd) {
         }
         inject_release();
         resp_append("{\"success\":true}");
+    }
+    else if (lv_strcmp(cmd_name, "sync") == 0) {
+        /* Settle barrier: drain already-pending LVGL work from previous commands.
+         * Does NOT advance time (no lv_tick_inc) — only processes work that is
+         * already due. Hashes the full widget subtree (recursive) to detect
+         * when the UI is stable. Stops when hash is unchanged for 2 consecutive
+         * timer passes, or after 50 iterations.
+         * Does NOT wait for animations — use wait_for() for async transitions. */
+        uint32_t prev_hash = 0;
+        int stable = 0;
+        int iterations = 0;
+        const int max_iter = 50;
+
+        while (stable < 2 && iterations < max_iter) {
+            lv_timer_handler();
+            iterations++;
+
+            /* Hash the full widget tree recursively: visibility, position,
+             * size, text, and clickable state for every widget. */
+            uint32_t hash = 0;
+            lv_obj_t* scr = lv_screen_active();
+            if (scr) hash = hash_widget_tree(scr);
+
+            if (hash == prev_hash) {
+                stable++;
+            } else {
+                stable = 0;
+                prev_hash = hash;
+            }
+        }
+
+        lv_refr_now(NULL);
+        resp_append("{\"done\":true,\"iterations\":");
+        resp_append_int(iterations);
+        resp_append("}");
     }
     else if (lv_strcmp(cmd_name, "get_logs") == 0) {
         resp_append("{\"logs\":[");

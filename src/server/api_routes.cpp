@@ -127,11 +127,16 @@ static crow::response h_screen_info(RouteCtx* ctx) {
 // --- Input ---
 
 static crow::response h_click(RouteCtx* ctx, const nlohmann::json& body) {
-    if (auto n = NameRequest::parse(body))
-        return json_ok({{"success", ctx->protocol->click(n->name)}});
-    if (auto c = CoordsRequest::parse(body))
-        return json_ok({{"success", ctx->protocol->click_at(c->x, c->y)}});
-    return json_err(400, "Need 'name' or 'x','y'");
+    try {
+        if (auto n = NameRequest::parse(body))
+            return json_ok({{"success", ctx->protocol->click(n->name)}, {"received", true}});
+        if (auto c = CoordsRequest::parse(body))
+            return json_ok({{"success", ctx->protocol->click_at(c->x, c->y)}});
+        return json_err(400, "Need 'name' or 'x','y'");
+    } catch (const click_not_received& e) {
+        return json_ok({{"success", true}, {"received", false},
+                        {"error", e.what()}});
+    }
 }
 
 static crow::response h_press(RouteCtx* ctx, const nlohmann::json& body) {
@@ -148,6 +153,11 @@ static crow::response h_move(RouteCtx* ctx, const nlohmann::json& body) {
 
 static crow::response h_release(RouteCtx* ctx, const nlohmann::json&) {
     return json_ok({{"success", ctx->protocol->release()}});
+}
+
+static crow::response h_sync(RouteCtx* ctx, const nlohmann::json&) {
+    ctx->protocol->sync();
+    return json_ok({{"done", true}});
 }
 
 static crow::response h_type(RouteCtx* ctx, const nlohmann::json& body) {
@@ -383,6 +393,7 @@ void register_api_routes(CrowApp& app,
     CROW_ROUTE(app, "/api/key").methods("POST"_method)          (wrap_post<h_key>(ctx));
     CROW_ROUTE(app, "/api/swipe").methods("POST"_method)        (wrap_post<h_swipe>(ctx));
     CROW_ROUTE(app, "/api/long-press").methods("POST"_method)   (wrap_post<h_long_press>(ctx));
+    CROW_ROUTE(app, "/api/sync").methods("POST"_method)         (wrap_post<h_sync>(ctx));
     CROW_ROUTE(app, "/api/drag").methods("POST"_method)         (wrap_post<h_drag>(ctx));
 
     // Inspection

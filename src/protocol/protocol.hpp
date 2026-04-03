@@ -20,6 +20,13 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+/// Thrown when a click was injected but intercepted by another widget
+/// (e.g. a modal dialog on top of the target widget).
+class click_not_received : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class Protocol {
 public:
     explicit Protocol(ITransport* transport);
@@ -32,8 +39,10 @@ public:
     //   - All methods throw std::runtime_error on transport failure (connection lost,
     //     send/receive error). Callers must catch or let it propagate.
     //   - find() returns nullopt when the widget doesn't exist (expected case).
-    //   - Interaction methods (click, press, etc.) return false when the target
-    //     reports a logical failure (e.g. widget not found for click-by-name).
+    //   - Interaction methods (press, release, etc.) return false when the target
+    //     reports a logical failure (e.g. widget not found).
+    //   - click() throws click_not_received if the click was intercepted by another
+    //     widget (e.g. modal dialog). Returns false only for widget-not-found.
     //   - Query methods (get_tree, screenshot, etc.) throw on any failure.
 
     std::string ping();
@@ -52,6 +61,12 @@ public:
     Image screenshot();
     nlohmann::json get_props(const std::string& selector, const std::string& prop = "");
     ScreenInfo get_screen_info();
+
+    /// Settle barrier: drains already-pending LVGL work from previous commands.
+    /// Loops lv_timer_handler (without advancing time) until the full widget tree
+    /// hash is stable across 2 consecutive passes (capped at 50 iterations).
+    /// Does not wait for animations — use wait_for() for async transitions.
+    void sync();
 
     // Log capture
     nlohmann::json get_logs();

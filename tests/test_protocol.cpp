@@ -141,6 +141,45 @@ TEST_CASE("Protocol::click throws on transport error") {
     CHECK_THROWS_AS(proto.click("btn"), std::runtime_error);
 }
 
+TEST_CASE("Protocol::click throws click_not_received when intercepted") {
+    MockTransport transport;
+    Protocol proto(&transport);
+
+    transport.queue({{"success", true}, {"received", false}});
+    CHECK_THROWS_AS(proto.click("btn_ok"), click_not_received);
+}
+
+TEST_CASE("Protocol::click succeeds with received=true") {
+    MockTransport transport;
+    Protocol proto(&transport);
+
+    transport.queue({{"success", true}, {"received", true}});
+    CHECK(proto.click("btn_ok") == true);
+}
+
+// ============================================================
+// Protocol::sync
+// ============================================================
+
+TEST_CASE("Protocol::sync sends command") {
+    MockTransport transport;
+    Protocol proto(&transport);
+
+    transport.queue({{"done", true}});
+    proto.sync();  // should not throw
+
+    REQUIRE(!transport.sent.empty());
+    auto cmd = json::parse(transport.sent[0]);
+    CHECK(cmd["cmd"] == "sync");
+}
+
+TEST_CASE("Protocol::sync throws on transport error") {
+    MockTransport transport;
+    Protocol proto(&transport);
+    // No response
+    CHECK_THROWS_AS(proto.sync(), std::runtime_error);
+}
+
 TEST_CASE("Protocol::click_at sends coordinates") {
     MockTransport transport;
     Protocol proto(&transport);
